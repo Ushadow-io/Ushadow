@@ -109,6 +109,12 @@ pub async fn discover_environments_v2(
 
         let running = status == EnvironmentStatus::Running || status == EnvironmentStatus::Partial;
 
+        // Extract project name from project_root path (last directory name)
+        let project_name = std::path::Path::new(&project_root)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|s| s.to_string());
+
         environments.push(UshadowEnvironment {
             name: env_name.clone(),
             color: primary_color,
@@ -125,6 +131,7 @@ pub async fn discover_environments_v2(
             is_worktree: true,
             created_at: None,  // TODO: Get actual creation timestamp from git worktree
             base_branch: None,  // TODO: Determine base branch (main/dev) from worktree
+            project_name,
         });
     }
 

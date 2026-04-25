@@ -13,7 +13,6 @@ Platforms:
 
 import logging
 import os
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -35,7 +34,7 @@ class ConnectionInfo(BaseModel):
 
 @router.get("", response_model=ConnectionInfo)
 async def get_connection_info(
-    target_id: Optional[str] = Query(
+    target_id: str | None = Query(
         None,
         description="Deploy target ID (e.g. 'my-cluster.k8s.prod' or 'orange-public.unode.orange'). "
                     "Auto-detected when omitted.",
@@ -48,8 +47,8 @@ async def get_connection_info(
     After connecting, clients use the returned api_url and keycloak_mobile_url
     to authenticate and access the API.
     """
-    from src.utils.environment import is_kubernetes
     from src.config.casdoor_settings import get_casdoor_config
+    from src.utils.environment import is_kubernetes
 
     casdoor_config = get_casdoor_config()
     realm = casdoor_config.get("organization", "ushadow")
@@ -67,8 +66,8 @@ async def get_connection_info(
 
 async def _connection_info_docker(realm: str, auth_url: str) -> ConnectionInfo:
     """Connection info for a private Docker/unode deployment."""
-    from src.services.unode_manager import get_unode_manager
     from src.models.unode import UNodeRole
+    from src.services.unode_manager import get_unode_manager
     from src.utils.tailscale_serve import get_tailscale_status
 
     unode_manager = await get_unode_manager()
@@ -101,23 +100,25 @@ async def _connection_info_docker(realm: str, auth_url: str) -> ConnectionInfo:
 
 def _connection_info_k8s(realm: str) -> ConnectionInfo:
     """Connection info for a Kubernetes deployment."""
+    from src.config.casdoor_settings import get_casdoor_config
+
     api_url = os.getenv("USHADOW_PUBLIC_URL", "").rstrip("/")
-    kc_mobile_url = os.getenv("KC_HOSTNAME_URL", "").rstrip("/")
+    casdoor_url = get_casdoor_config().get("public_url", "").rstrip("/")
 
     if not api_url:
         raise HTTPException(
             status_code=503,
             detail="USHADOW_PUBLIC_URL is not set. Configure the K8s deployment.",
         )
-    if not kc_mobile_url:
+    if not casdoor_url:
         raise HTTPException(
             status_code=503,
-            detail="KC_HOSTNAME_URL is not set. Configure the K8s deployment.",
+            detail="CASDOOR_EXTERNAL_URL is not set. Configure the K8s deployment.",
         )
 
     return ConnectionInfo(
         api_url=api_url,
-        keycloak_mobile_url=kc_mobile_url,
+        keycloak_mobile_url=casdoor_url,
         realm=realm,
         mobile_client_id="ushadow-mobile",
         platform="kubernetes",
@@ -132,7 +133,7 @@ async def _connection_info_for_target(target_id: str, realm: str) -> ConnectionI
     try:
         target = await DeployTarget.from_id(target_id)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
     is_public = (target.raw_metadata.get("labels") or {}).get("zone") == "public"
 

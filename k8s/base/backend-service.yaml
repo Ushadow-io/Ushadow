@@ -3,7 +3,7 @@ kind: Service
 metadata:
   labels:
     io.kompose.service: backend
-  name: ushadow-backend
+  name: backend
 spec:
   ports:
     - name: "8000"

@@ -132,6 +132,8 @@ max-returns = 6        # Simplify return logic
 "scripts/*" = ["T201"]
 # Allow assert in tests
 "tests/*" = ["S101", "PLR2004"]
+# FastAPI routers: Depends() in default args (B008) and unused current_user auth deps (ARG001) are idiomatic
+"src/routers/*.py" = ["B008", "ARG001"]
 
 [tool.ruff.lint.isort]
 # Organize imports for readability

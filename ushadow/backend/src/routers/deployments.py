@@ -1,34 +1,33 @@
 """API routes for service deployments."""
 
 import logging
-from typing import List, Optional, Dict, Any
+from typing import Any
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from src.models.deploy_target import DeployTarget
 from src.models.deployment import (
-    ServiceDefinition,
-    ServiceDefinitionCreate,
-    ServiceDefinitionUpdate,
+    AdoptRequest,
     Deployment,
     DeployRequest,
     DiscoveredWorkload,
-    AdoptRequest,
+    ServiceDefinition,
+    ServiceDefinitionCreate,
+    ServiceDefinitionUpdate,
 )
+from src.services.auth import get_current_user
+from src.services.deployment_manager import get_deployment_manager
+from src.services.kubernetes import get_kubernetes_manager
+from src.services.unode_manager import get_unode_manager
+
 # Slim view of a deployment — excludes deployed_config (which contains the full env map).
-# Used by the instance page to avoid transmitting large environment variable payloads.
 _SLIM_FIELDS = {
     'id', 'config_id', 'service_id', 'unode_hostname', 'status',
     'container_id', 'container_name', 'created_at', 'deployed_at',
     'exposed_port', 'access_url', 'public_url', 'metadata',
     'backend_type', 'healthy', 'health_message', 'error',
 }
-from src.services.deployment_manager import get_deployment_manager
-from src.services.auth import get_current_user
-from src.services.unode_manager import get_unode_manager
-from src.services.kubernetes import get_kubernetes_manager
-from src.models.deploy_target import DeployTarget
-from src.models.unode import UNodeType
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +38,7 @@ router = APIRouter(prefix="/api/deployments", tags=["deployments"])
 # Deployment Targets Endpoint
 # =============================================================================
 
-@router.get("/targets", response_model=List[Dict[str, Any]])
+@router.get("/targets", response_model=list[dict[str, Any]])
 async def list_deployment_targets(
     current_user: dict = Depends(get_current_user)
 ):
@@ -118,9 +117,9 @@ async def list_deployment_targets(
             if infra:
                 logger.info(f"    Infrastructure services: {list(infra.keys())}")
             else:
-                logger.info(f"    ⚠️ No infrastructure found in any namespace")
+                logger.info("    ⚠️ No infrastructure found in any namespace")
         else:
-            logger.info(f"    ⚠️ No infra_scans available for cluster")
+            logger.info("    ⚠️ No infra_scans available for cluster")
 
         # Try to infer provider from labels or use default
         provider = cluster.labels.get("provider", "kubernetes")
@@ -159,14 +158,14 @@ async def get_target_infrastructure_env_vars(
       - source='infrastructure' : from cluster infra scan (locked=True)
       - source='override'       : user-saved manual override (locked=False)
     """
-    from src.models.deploy_target import DeployTarget
     from src.config import get_settings_store
+    from src.models.deploy_target import DeployTarget
     from src.services.infrastructure_env_service import resolve_infrastructure_env_vars
 
     try:
         target = await DeployTarget.from_id(target_id)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
     store = get_settings_store()
     env_vars = await resolve_infrastructure_env_vars(target, store)
@@ -176,17 +175,17 @@ async def get_target_infrastructure_env_vars(
 @router.put("/targets/{target_id}/infrastructure-env-vars")
 async def save_target_infrastructure_overrides(
     target_id: str,
-    overrides: Dict[str, str],
+    overrides: dict[str, str],
     current_user: dict = Depends(get_current_user),
 ):
     """Save manual infrastructure overrides for a deploy target."""
-    from src.models.deploy_target import DeployTarget
     from src.config import get_settings_store
+    from src.models.deploy_target import DeployTarget
 
     try:
         target = await DeployTarget.from_id(target_id)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
     if target.type != "k8s":
         raise HTTPException(status_code=400, detail="Infrastructure overrides only supported for K8s targets")
@@ -209,17 +208,16 @@ async def create_service_definition(
     """Create a new service definition."""
     manager = get_deployment_manager()
     try:
-        service = await manager.create_service(
+        return await manager.create_service(
             data,
             created_by=current_user.get("email")
         )
-        return service
     except Exception as e:
         logger.error(f"Failed to create service: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-@router.get("/services", response_model=List[ServiceDefinition])
+@router.get("/services", response_model=list[ServiceDefinition])
 async def list_service_definitions(
     current_user: dict = Depends(get_current_user)
 ):
@@ -268,7 +266,7 @@ async def delete_service_definition(
             raise HTTPException(status_code=404, detail="Service not found")
         return {"success": True, "message": f"Service {service_id} deleted"}
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 # =============================================================================
@@ -283,27 +281,24 @@ async def deploy_service(
     """Deploy a service to a u-node."""
     manager = get_deployment_manager()
     try:
-        # If config_id not provided, use service_id (template as config)
         config_id = data.config_id or data.service_id
-
-        deployment = await manager.deploy_service(
+        return await manager.deploy_service(
             data.service_id,
             data.unode_hostname,
             config_id=config_id,
             force_rebuild=data.force_rebuild
         )
-        return deployment
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.exception(f"Deployment failed ({type(e).__name__}): {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("")
 async def list_deployments(
-    service_id: Optional[str] = None,
-    unode_hostname: Optional[str] = None,
+    service_id: str | None = None,
+    unode_hostname: str | None = None,
     slim: bool = False,
     current_user: dict = Depends(get_current_user)
 ):
@@ -331,11 +326,11 @@ async def list_deployments(
 # =============================================================================
 
 @router.get("/exposed-urls")
-async def get_exposed_urls(
-    url_type: Optional[str] = Query(None, alias="type", description="Filter by URL type (e.g., 'audio', 'http')"),
-    url_name: Optional[str] = Query(None, alias="name", description="Filter by URL name (e.g., 'audio_intake')"),
-    format: Optional[str] = Query(None, description="Filter by audio format (e.g., 'opus', 'pcm')"),
-    status: Optional[str] = Query(None, description="Filter by instance status (e.g., 'running')"),
+async def get_exposed_urls(  # noqa: C901
+    url_type: str | None = Query(None, alias="type", description="Filter by URL type (e.g., 'audio', 'http')"),
+    url_name: str | None = Query(None, alias="name", description="Filter by URL name (e.g., 'audio_intake')"),
+    audio_format: str | None = Query(None, alias="format", description="Filter by audio format (e.g., 'opus', 'pcm')"),
+    status: str | None = Query(None, description="Filter by instance status (e.g., 'running')"),
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -347,9 +342,8 @@ async def get_exposed_urls(
     Example: GET /api/deployments/exposed-urls?type=audio&name=audio_intake&format=opus&status=running
     Returns: List of audio intake endpoints that support Opus format from Chronicle, Mycelia, etc.
     """
-    from src.services.service_config_manager import get_service_config_manager
 
-    logger.info(f"[exposed-urls] Filtering by status={status}, url_type={url_type}, url_name={url_name}, format={format}")
+    logger.info(f"[exposed-urls] Filtering by status={status}, url_type={url_type}, url_name={url_name}, format={audio_format}")
 
     result = []
     seen_containers = set()  # Track container names to avoid duplicates
@@ -359,17 +353,17 @@ async def get_exposed_urls(
 
     # Also check running docker containers from MANAGEABLE_SERVICES
     # This handles services started via docker compose that don't have service_config entries
-    from src.services.docker_manager import get_docker_manager
-    from src.services.compose_registry import get_compose_registry
     import os
+
+    from src.services.compose_registry import get_compose_registry
+    from src.services.docker_manager import get_docker_manager
 
     docker_mgr = get_docker_manager()
     compose_registry = get_compose_registry()
-    project_name = os.getenv("COMPOSE_PROJECT_NAME", "ushadow")
 
-    logger.info(f"[exposed-urls] Checking MANAGEABLE_SERVICES for additional exposed URLs")
+    logger.info("[exposed-urls] Checking MANAGEABLE_SERVICES for additional exposed URLs")
 
-    for service_name in docker_mgr.MANAGEABLE_SERVICES.keys():
+    for service_name in docker_mgr.MANAGEABLE_SERVICES:
         # Get service info to check if it's running
         service_info = docker_mgr.get_service_info(service_name)
 
@@ -410,10 +404,8 @@ async def get_exposed_urls(
                 continue
 
             # Filter by format if requested (check metadata.formats array)
-            if format:
-                supported_formats = exp_metadata.get('formats', [])
-                if format not in supported_formats:
-                    continue
+            if audio_format and audio_format not in exp_metadata.get('formats', []):
+                continue
 
             # Build internal URL (for relay to connect to)
             # Audio endpoints use WebSocket protocol
@@ -440,7 +432,7 @@ async def get_exposed_urls(
 
     # Also check running deployments on the local leader
     # This handles services started via deployment manager (not docker compose)
-    logger.info(f"[exposed-urls] Checking deployments for additional exposed URLs")
+    logger.info("[exposed-urls] Checking deployments for additional exposed URLs")
 
     # Get local hostname to filter for only local deployments
     # Use COMPOSE_PROJECT_NAME first as that's what unodes are registered with
@@ -502,10 +494,8 @@ async def get_exposed_urls(
                 continue
 
             # Filter by format if requested (check metadata.formats array)
-            if format:
-                supported_formats = exp_metadata.get('formats', [])
-                if format not in supported_formats:
-                    continue
+            if audio_format and audio_format not in exp_metadata.get('formats', []):
+                continue
 
             # Build internal URL (for relay to connect to)
             # Audio endpoints use WebSocket protocol
@@ -564,9 +554,8 @@ async def get_exposed_urls(
                         continue
                     if url_name and exp_name != url_name:
                         continue
-                    if format:
-                        if format not in exp_metadata.get("formats", []):
-                            continue
+                    if audio_format and audio_format not in exp_metadata.get("formats", []):
+                        continue
                     protocol = "ws" if exp_type == "audio" else "http"
                     exp_url = f"{protocol}://{k8s_host}:{port}{path}"
                     result.append({
@@ -583,9 +572,66 @@ async def get_exposed_urls(
     except Exception as e:
         logger.warning(f"[exposed-urls] K8s discovery failed: {e}")
 
+    # ---- In-cluster discovery (when running inside a k8s pod, no MongoDB needed) ----
+    from src.utils.environment import is_kubernetes
+    if is_kubernetes():
+        try:
+            from pathlib import Path as _Path
+
+            from kubernetes import client as _k8s_client
+            from kubernetes import config as _k8s_config
+
+            _k8s_config.load_incluster_config()
+            _core_api = _k8s_client.CoreV1Api()
+
+            _ns_file = _Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+            _namespace = _ns_file.read_text().strip() if _ns_file.exists() else "ushadow"
+
+            _pods = _core_api.list_namespaced_pod(namespace=_namespace)
+            for _pod in _pods.items:
+                if _pod.status.phase != "Running":
+                    continue
+                _labels = _pod.metadata.labels or {}
+                _svc_name = _labels.get("app.kubernetes.io/name")
+                if not _svc_name:
+                    continue
+                _compose_svc = compose_registry.get_service_by_name(_svc_name)
+                if not _compose_svc or not getattr(_compose_svc, "exposes", None):
+                    continue
+                _k8s_host = f"{_svc_name}.{_namespace}.svc.cluster.local"
+                if _k8s_host in seen_containers:
+                    continue
+                for _expose in _compose_svc.exposes:
+                    _exp_type = _expose.get("type")
+                    _exp_name = _expose.get("name")
+                    _path = _expose.get("path", "")
+                    _port = _expose.get("port")
+                    _exp_meta = _expose.get("metadata", {})
+                    if url_type and _exp_type != url_type:
+                        continue
+                    if url_name and _exp_name != url_name:
+                        continue
+                    if audio_format and audio_format not in _exp_meta.get("formats", []):
+                        continue
+                    _proto = "ws" if _exp_type == "audio" else "http"
+                    _exp_url = f"{_proto}://{_k8s_host}:{_port}{_path}"
+                    result.append({
+                        "instance_id": f"incluster:{_namespace}:{_pod.metadata.name}",
+                        "instance_name": _compose_svc.display_name or _svc_name,
+                        "url": _exp_url,
+                        "type": _exp_type,
+                        "name": _exp_name,
+                        "metadata": _exp_meta,
+                        "status": "running",
+                    })
+                    seen_containers.add(_k8s_host)
+                    logger.info(f"[exposed-urls] Added in-cluster URL: {_exp_name} -> {_exp_url} (pod {_pod.metadata.name})")
+        except Exception as _e:
+            logger.warning(f"[exposed-urls] In-cluster discovery failed: {_e}")
+
     logger.info("=" * 80)
     logger.info(f"[exposed-urls] RETURNING {len(result)} TOTAL EXPOSED URLs")
-    logger.info(f"[exposed-urls] PARAMS: status={status}, url_type={url_type}, url_name={url_name}, format={format}")
+    logger.info(f"[exposed-urls] PARAMS: status={status}, url_type={url_type}, url_name={url_name}, format={audio_format}")
     logger.info(f"[exposed-urls] Unique containers collected: {len(seen_containers)}")
     logger.info("=" * 80)
 
@@ -602,7 +648,7 @@ async def get_exposed_urls(
     return result
 
 
-@router.get("/find/{service_id}", response_model=List[DiscoveredWorkload])
+@router.get("/find/{service_id}", response_model=list[DiscoveredWorkload])
 async def find_workloads(
     service_id: str,
     current_user: dict = Depends(get_current_user),
@@ -635,7 +681,7 @@ async def adopt_workload(
         return await manager.adopt_workload(service_id, req)
     except Exception as e:
         logger.error(f"Failed to adopt workload {service_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{deployment_id}", response_model=Deployment)
@@ -659,13 +705,12 @@ async def stop_deployment(
     """Stop a deployment."""
     manager = get_deployment_manager()
     try:
-        deployment = await manager.stop_deployment(deployment_id)
-        return deployment
+        return await manager.stop_deployment(deployment_id)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Stop failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/{deployment_id}/restart", response_model=Deployment)
@@ -676,18 +721,17 @@ async def restart_deployment(
     """Restart a deployment."""
     manager = get_deployment_manager()
     try:
-        deployment = await manager.restart_deployment(deployment_id)
-        return deployment
+        return await manager.restart_deployment(deployment_id)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Restart failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 class UpdateDeploymentRequest(BaseModel):
     """Request to update a deployment's environment variables."""
-    env_vars: Dict[str, str]
+    env_vars: dict[str, str]
 
 
 @router.put("/{deployment_id}", response_model=Deployment)
@@ -722,10 +766,10 @@ async def update_deployment(
         return updated_deployment
 
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Update deployment failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.delete("/{deployment_id}")
@@ -742,7 +786,7 @@ async def remove_deployment(
         raise
     except Exception as e:
         logger.error(f"Remove failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{deployment_id}/logs")
@@ -767,7 +811,7 @@ async def get_deployment_logs(
 async def get_funnel_configuration(
     deployment_id: str,
     current_user: dict = Depends(get_current_user)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Get funnel configuration for a deployment.
 
     Returns funnel status, route, and public URL if configured.
@@ -816,15 +860,15 @@ async def get_funnel_configuration(
 @router.patch("/{deployment_id}/funnel")
 async def configure_funnel_route(
     deployment_id: str,
-    request: Dict[str, Any],
+    request: dict[str, Any],
     current_user: dict = Depends(get_current_user)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Configure funnel route for a deployment.
 
     Enables public internet access via Tailscale Funnel.
     """
-    from src.services.tailscale_manager import get_tailscale_manager
     from src.services.service_config_manager import get_service_config_manager
+    from src.services.tailscale_manager import get_tailscale_manager
 
     route = request.get("route")
     save_to_config = request.get("save_to_config", False)
@@ -920,13 +964,13 @@ async def remove_funnel_route(
     deployment_id: str,
     save_to_config: bool = Query(False),
     current_user: dict = Depends(get_current_user)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Remove funnel route for a deployment.
 
     Disables public internet access for this deployment.
     """
-    from src.services.tailscale_manager import get_tailscale_manager
     from src.services.service_config_manager import get_service_config_manager
+    from src.services.tailscale_manager import get_tailscale_manager
 
     manager = get_deployment_manager()
 

@@ -4,39 +4,22 @@ kind: Kustomization
 namespace: ushadow
 
 resources:
-  # - namespace.yaml  # Namespace managed separately - DO NOT let Skaffold delete it!
-  # secret.yaml is gitignored (contains plaintext creds) - apply once manually:
-  #   kubectl apply -f k8s/secret.yaml   (copy from secret.yaml.example and fill in values)
-  #
-  # PVCs are NOT listed here — managed by seed-pvcs.sh so Skaffold never deletes them.
-  # Skaffold runs `skaffold delete` on `dev` teardown which would wipe PVC-stored overrides.
-  - backend-deployment.yaml
-  - backend-service.yaml
-  - webui-deployment.yaml
-  - webui-service.yaml
-  - ingress.yaml
-  - certificate.yaml
-  # - infra/  # Infrastructure managed separately
-
-# K8s-specific env vars loaded from .env.k8s (gitignored, copy from .env and update for K8s)
-# Provides: KC_HOSTNAME_URL, KC_URL, CORS_ORIGINS, USHADOW_PUBLIC_URL, etc.
-configMapGenerator:
-  - name: backend-k8s-env
-    envs:
-      - .env.k8s
-generatorOptions:
-  disableNameSuffixHash: true
+  - namespace.yaml
+  - configmap.yaml
+  # secret.yaml intentionally NOT included.
+  # ushadow-secret is the single responsibility of `just k8s-apply-secret`,
+  # which sources it from config/SECRETS/secrets_k8s.yaml (gitignored).
+  # skaffold's `deploy.hooks.before` runs that command pre-deploy.
+  - infra/
+  - base/
+  # - tweaks/ingress-example.yaml  # Uncomment when ready
 
 # Add common labels to all resources
-labels:
-  - pairs:
-      app: ushadow
-      env: purple
+commonLabels:
+  app: ushadow
+  env: ushadow
 
 # Add annotations
 commonAnnotations:
   managed-by: kustomize
   deployed-from: docker-compose
-
-# Note: Image replacement handled by Skaffold's --default-repo flag
-# No Kustomize image transformers needed when using Skaffold

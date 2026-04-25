@@ -37,6 +37,7 @@ export interface UshadowEnvironment {
   branch: string | null
   is_worktree: boolean
   base_branch: string | null  // "main" or "dev" - which base branch this worktree was created from
+  project_name: string | null  // Project name for multi-project support
 }
 
 // Legacy alias for backward compatibility

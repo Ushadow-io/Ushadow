@@ -60,4 +60,4 @@ Add NetworkPolicy for security (optional but recommended)
 - `base/` - Application services (backend, frontend)
 - `namespace.yaml` - Namespace definition
 - `configmap.yaml` - Configuration data
-- `secret.yaml` - Secrets (template only)
+- `ushadow-secret` - Applied by `just k8s-apply-secret` from `config/SECRETS/secrets_k8s.yaml`. Not managed by kustomize (skaffold runs it as a pre-deploy hook).

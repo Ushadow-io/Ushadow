@@ -1,27 +1,26 @@
 """Deployment manager for orchestrating services across u-nodes."""
 
-import asyncio
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import aiohttp
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from src.models.deploy_target import DeployTarget
 from src.models.deployment import (
+    AdoptRequest,
+    Deployment,
+    DeploymentStatus,
+    DiscoveredWorkload,
+    ResolvedServiceDefinition,
     ServiceDefinition,
     ServiceDefinitionCreate,
     ServiceDefinitionUpdate,
-    Deployment,
-    DeploymentStatus,
-    ResolvedServiceDefinition,
-    DiscoveredWorkload,
-    AdoptRequest,
 )
 from src.models.unode import UNode
-from src.models.deploy_target import DeployTarget
 from src.services.compose_registry import get_compose_registry
 from src.services.deployment_platforms import get_deploy_platform
 from src.utils.environment import is_local_deployment as env_is_local_deployment
@@ -54,8 +53,7 @@ def _update_tailscale_serve_route(service_id: str, container_name: str, port: in
 
         if add:
             return add_service_route(service_id, container_name, port)
-        else:
-            return remove_service_route(service_id)
+        return remove_service_route(service_id)
     except Exception as e:
         logger.warning(f"Failed to update tailscale serve route: {e}")
         return False
@@ -82,7 +80,7 @@ class DeploymentManager:
         # self.deployments_collection = db.deployments
         self.unodes_collection = db.unodes
         self.adopted_workloads_collection = db.adopted_workloads
-        self._http_session: Optional[aiohttp.ClientSession] = None
+        self._http_session: aiohttp.ClientSession | None = None
 
     async def initialize(self):
         """Initialize indexes."""
@@ -150,6 +148,7 @@ class DeploymentManager:
         """
         import subprocess
         from pathlib import Path
+
         from src.config import get_settings
 
         settings = get_settings()
@@ -206,11 +205,11 @@ class DeploymentManager:
     # Centralized Service Resolution
     # =========================================================================
 
-    async def resolve_service_for_deployment(
+    async def resolve_service_for_deployment(  # noqa: C901
         self,
         service_id: str,
-        deploy_target: Optional[str] = None,
-        config_id: Optional[str] = None
+        deploy_target: str | None = None,
+        config_id: str | None = None
     ) -> "ResolvedServiceDefinition":
         """
         Resolve all variables for a service using the new Settings API.
@@ -246,8 +245,10 @@ class DeploymentManager:
             ValueError: If service not found or resolution fails
         """
         import subprocess
-        import yaml
         from pathlib import Path
+
+        import yaml
+
         from src.models.deployment import ResolvedServiceDefinition
 
         compose_registry = get_compose_registry()
@@ -289,13 +290,12 @@ class DeploymentManager:
         }
 
         # Build subprocess environment for docker-compose config (needs all vars for ${VAR} substitution)
-        import os
         # Strip K8s-injected service discovery vars (e.g. MONGODB_PORT=tcp://10.x.x.x:27017).
         # Kubernetes auto-injects these for every service in the namespace; Docker Compose
         # misinterprets the tcp:// prefix as a port bind address and raises "invalid IP address".
         subprocess_env = {
             k: v for k, v in os.environ.items()
-            if not (isinstance(v, str) and (v.startswith("tcp://") or v.startswith("udp://")))
+            if not (isinstance(v, str) and v.startswith(("tcp://", "udp://")))
         }
         subprocess_env.update(container_env)
 
@@ -416,7 +416,6 @@ class DeploymentManager:
                 elif isinstance(vol, dict):
                     # Long format: {"type": "volume", "source": "name", "target": "/path"}
                     # or {"type": "bind", "source": "/host/path", "target": "/container/path"}
-                    vol_type = vol.get("type", "volume")
                     source = vol.get("source", "")
                     target = vol.get("target", "")
                     read_only = vol.get("read_only", False)
@@ -489,14 +488,14 @@ class DeploymentManager:
 
             return resolved
 
-        except subprocess.TimeoutExpired:
-            raise ValueError("docker-compose config timed out")
+        except subprocess.TimeoutExpired as e:
+            raise ValueError("docker-compose config timed out") from e
         except Exception as e:
             import traceback
             logger.error(f"Failed to resolve service {service_id}: {e}")
             logger.error(f"Exception type: {type(e).__name__}")
             logger.error(f"Traceback: {traceback.format_exc()}")
-            raise ValueError(f"Service resolution failed: {e}")
+            raise ValueError(f"Service resolution failed: {e}") from e
 
     # =========================================================================
     # Service Definition CRUD
@@ -505,10 +504,10 @@ class DeploymentManager:
     async def create_service(
         self,
         data: ServiceDefinitionCreate,
-        created_by: Optional[str] = None
+        created_by: str | None = None
     ) -> ServiceDefinition:
         """Create a new service definition."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         service = ServiceDefinition(
             service_id=data.service_id,
@@ -534,7 +533,7 @@ class DeploymentManager:
         logger.info(f"Created service definition: {service.service_id}")
         return service
 
-    async def list_services(self) -> List[ServiceDefinition]:
+    async def list_services(self) -> list[ServiceDefinition]:
         """List all service definitions."""
         cursor = self.services_collection.find({})
         services = []
@@ -542,7 +541,7 @@ class DeploymentManager:
             services.append(ServiceDefinition(**doc))
         return services
 
-    async def get_service(self, service_id: str) -> Optional[ServiceDefinition]:
+    async def get_service(self, service_id: str) -> ServiceDefinition | None:
         """Get a service definition by ID."""
         doc = await self.services_collection.find_one({"service_id": service_id})
         if doc:
@@ -553,13 +552,13 @@ class DeploymentManager:
         self,
         service_id: str,
         data: ServiceDefinitionUpdate
-    ) -> Optional[ServiceDefinition]:
+    ) -> ServiceDefinition | None:
         """Update a service definition."""
         update_data = data.model_dump(exclude_unset=True)
         if not update_data:
             return await self.get_service(service_id)
 
-        update_data["updated_at"] = datetime.now(timezone.utc)
+        update_data["updated_at"] = datetime.now(UTC)
 
         result = await self.services_collection.find_one_and_update(
             {"service_id": service_id},
@@ -596,12 +595,12 @@ class DeploymentManager:
     # Deployment Operations
     # =========================================================================
 
-    async def deploy_service(
+    async def deploy_service(  # noqa: C901
         self,
         service_id: str,
         unode_hostname: str,
         config_id: str,
-        namespace: Optional[str] = None,
+        namespace: str | None = None,
         force_rebuild: bool = False,
     ) -> Deployment:
         """
@@ -628,7 +627,7 @@ class DeploymentManager:
             logger.info(f"[DEBUG deploy_service] Resolved service has service_id={resolved_service.service_id}, name={resolved_service.name}")
         except ValueError as e:
             logger.error(f"Failed to resolve service {service_id}: {e}")
-            raise ValueError(f"Service resolution failed: {e}")
+            raise ValueError(f"Service resolution failed: {e}") from e
 
         # For mycelia services: generate tokens in MongoDB before deploying.
         # The script writes directly via pymongo — Mycelia does not need to be running.
@@ -652,7 +651,7 @@ class DeploymentManager:
         deployment_id = str(uuid.uuid4())[:8]
 
         # Create deployment target from unode with standardized fields
-        from src.models.unode import UNodeType, UNodeRole
+        from src.models.unode import UNodeRole, UNodeType
         from src.utils.deployment_targets import parse_deployment_target_id
 
         parsed = parse_deployment_target_id(unode.deployment_target_id)
@@ -777,7 +776,7 @@ class DeploymentManager:
                     logger.warning(f"Could not configure Tailscale access URL: {e}")
                     logger.debug("Deployment will continue without Tailscale URL")
 
-            deployment.deployed_at = datetime.now(timezone.utc)
+            deployment.deployed_at = datetime.now(UTC)
 
         except Exception as e:
             logger.error(f"Deploy failed for {service_id} on {unode_hostname}: {e}")
@@ -814,7 +813,7 @@ class DeploymentManager:
                 # Refresh container status
                 container.reload()
                 deployment.status = DeploymentStatus.STOPPED
-                deployment.stopped_at = datetime.now(timezone.utc)
+                deployment.stopped_at = datetime.now(UTC)
 
             except Exception as e:
                 logger.error(f"Failed to stop local deployment {deployment_id}: {e}")
@@ -831,7 +830,7 @@ class DeploymentManager:
             unode = UNode(**unode_dict)
 
             # Create deployment target from unode with standardized fields
-            from src.models.unode import UNodeType, UNodeRole
+            from src.models.unode import UNodeRole, UNodeType
             from src.utils.deployment_targets import parse_deployment_target_id
 
             parsed = parse_deployment_target_id(unode.deployment_target_id)
@@ -860,7 +859,7 @@ class DeploymentManager:
 
                 if success:
                     deployment.status = DeploymentStatus.STOPPED
-                    deployment.stopped_at = datetime.now(timezone.utc)
+                    deployment.stopped_at = datetime.now(UTC)
 
             except Exception as e:
                 logger.error(f"Failed to stop remote deployment {deployment_id}: {e}")
@@ -909,7 +908,7 @@ class DeploymentManager:
     async def update_deployment(
         self,
         deployment_id: str,
-        env_vars: Dict[str, str]
+        env_vars: dict[str, str]
     ) -> Deployment:
         """
         Update a deployment's environment variables and redeploy.
@@ -917,9 +916,9 @@ class DeploymentManager:
         Compares provided env_vars against what Settings would normally resolve
         (layers 1-5) and only saves actual overrides to ServiceConfig.
         """
-        from src.services.service_config_manager import get_service_config_manager
-        from src.models.service_config import ServiceConfigCreate, ServiceConfigUpdate
         from src.config import get_settings
+        from src.models.service_config import ServiceConfigCreate, ServiceConfigUpdate
+        from src.services.service_config_manager import get_service_config_manager
 
         # Get existing deployment
         deployment = await self.get_deployment(deployment_id)
@@ -978,7 +977,7 @@ class DeploymentManager:
                     id=config_id,
                     template_id=deployment.service_id,
                     name=f"{deployment.service_id} ({deployment.unode_hostname})",
-                    description=f"Deployment configuration",
+                    description="Deployment configuration",
                     config=overrides_only,
                 )
             )
@@ -1024,8 +1023,8 @@ class DeploymentManager:
 
     async def _stop_k8s_deployment(self, deployment: Deployment) -> Deployment:
         """Scale a Kubernetes deployment to 0 replicas."""
-        from src.services.kubernetes import get_kubernetes_manager
         from src.services.deployment_platforms import KubernetesDeployPlatform
+        from src.services.kubernetes import get_kubernetes_manager
         from src.utils.environment import get_env_name
 
         cluster_id = deployment.backend_metadata.get("cluster_id")
@@ -1056,7 +1055,7 @@ class DeploymentManager:
             success = await platform.stop(target, deployment)
             if success:
                 deployment.status = DeploymentStatus.STOPPED
-                deployment.stopped_at = datetime.now(timezone.utc)
+                deployment.stopped_at = datetime.now(UTC)
 
         except RuntimeError:
             pass  # KubernetesManager not initialized
@@ -1067,10 +1066,29 @@ class DeploymentManager:
 
         return deployment
 
+    async def _unadopt_k8s_workload(self, deployment: Deployment) -> bool:
+        """Remove the adoption record for a K8s workload without touching the running workload."""
+        cluster_id = deployment.backend_metadata.get("cluster_id")
+        container_name = deployment.container_name
+        query: dict = {"container_name": container_name, "backend_type": "kubernetes"}
+        if cluster_id:
+            query["cluster_id"] = cluster_id
+        result = await self.adopted_workloads_collection.delete_one(query)
+        if result.deleted_count == 0 and cluster_id:
+            # Retry without cluster_id in case the record predates that field
+            result = await self.adopted_workloads_collection.delete_one(
+                {"container_name": container_name, "backend_type": "kubernetes"}
+            )
+        if result.deleted_count > 0:
+            logger.info(f"[unadopt] Removed adoption record for K8s workload {container_name}")
+            return True
+        logger.warning(f"[unadopt] No adoption record found for {container_name} (cluster={cluster_id})")
+        return False
+
     async def _remove_k8s_deployment(self, deployment: Deployment) -> bool:
         """Remove a Kubernetes deployment via KubernetesDeployPlatform."""
-        from src.services.kubernetes import get_kubernetes_manager
         from src.services.deployment_platforms import KubernetesDeployPlatform
+        from src.services.kubernetes import get_kubernetes_manager
         from src.utils.environment import get_env_name
 
         cluster_id = deployment.backend_metadata.get("cluster_id")
@@ -1114,6 +1132,17 @@ class DeploymentManager:
 
         # K8s deployments: route directly to KubernetesDeployPlatform
         if deployment.backend_type == "kubernetes":
+            # Check MongoDB for an adoption record — this covers both the case where
+            # get_deployment returned an adopted record (metadata.adopted=True) and the
+            # case where it returned a live-scan record that happens to have an adoption.
+            is_adopted = deployment.metadata.get("adopted") or bool(
+                await self.adopted_workloads_collection.find_one({
+                    "container_name": deployment.container_name,
+                    "backend_type": "kubernetes",
+                })
+            )
+            if is_adopted:
+                return await self._unadopt_k8s_workload(deployment)
             return await self._remove_k8s_deployment(deployment)
 
         unode_dict = await self.unodes_collection.find_one({
@@ -1126,7 +1155,7 @@ class DeploymentManager:
 
         unode = UNode(**unode_dict)
 
-        from src.models.unode import UNodeType, UNodeRole
+        from src.models.unode import UNodeRole, UNodeType
         from src.utils.deployment_targets import parse_deployment_target_id
 
         parsed = parse_deployment_target_id(unode.deployment_target_id)
@@ -1183,13 +1212,13 @@ class DeploymentManager:
         logger.info(f"Removed deployment: {deployment_id}")
         return True
 
-    async def get_deployment(self, deployment_id: str) -> Optional[Deployment]:
+    async def get_deployment(self, deployment_id: str) -> Deployment | None:  # noqa: C901
         """
         Get a deployment by ID by querying runtime.
 
         Queries all online unodes and K8s clusters until deployment is found.
         """
-        from src.models.unode import UNodeType, UNodeRole
+        from src.models.unode import UNodeRole, UNodeType
         from src.utils.deployment_targets import parse_deployment_target_id
 
         # Query all online unodes (Docker deployments)
@@ -1225,8 +1254,8 @@ class DeploymentManager:
 
         # Also search K8s clusters directly (mirrors list_deployments)
         try:
-            from src.services.kubernetes import get_kubernetes_manager
             from src.services.deployment_platforms import KubernetesDeployPlatform
+            from src.services.kubernetes import get_kubernetes_manager
             from src.utils.environment import get_env_name
 
             k8s_mgr = await get_kubernetes_manager()
@@ -1258,14 +1287,63 @@ class DeploymentManager:
         except Exception as e:
             logger.error(f"Failed to search K8s clusters in get_deployment: {e}")
 
+        # Also check adopted workloads in MongoDB (mirrors list_deployments adopted section)
+        try:
+            async for doc in self.adopted_workloads_collection.find({}):
+                backend_type = doc.get("backend_type", "docker")
+                container_name = doc.get("container_name")
+                cluster_id = doc.get("cluster_id", "unknown")
+                dep_id = (
+                    f"adopted-k8s-{cluster_id}-{container_name}"
+                    if backend_type == "kubernetes"
+                    else f"adopted-{container_name}"
+                )
+                if dep_id != deployment_id:
+                    continue
+                ports = doc.get("ports", [])
+                exposed_port = None
+                if ports:
+                    import contextlib
+                    with contextlib.suppress(ValueError, IndexError):
+                        exposed_port = int(ports[0].split(":")[0])
+                dep_backend_meta = (
+                    {
+                        "cluster_id": cluster_id,
+                        "namespace": doc.get("namespace"),
+                        "k8s_deployment_name": doc.get("k8s_deployment_name") or container_name,
+                    }
+                    if backend_type == "kubernetes"
+                    else {"compose_project": doc.get("compose_project")}
+                )
+                return Deployment(
+                    id=dep_id,
+                    service_id=doc["service_id"],
+                    config_id=doc.get("config_id"),
+                    unode_hostname=(
+                        f"{cluster_id}.k8s" if backend_type == "kubernetes"
+                        else doc.get("node_hostname", "local")
+                    ),
+                    status=DeploymentStatus.RUNNING if doc.get("status") == "running" else DeploymentStatus.STOPPED,
+                    container_name=container_name,
+                    container_id=doc.get("container_id"),
+                    deployed_config={"image": doc.get("image", ""), "ports": ports},
+                    backend_type=backend_type,
+                    backend_metadata=dep_backend_meta,
+                    metadata={"adopted": True},
+                    exposed_port=exposed_port,
+                    access_url=doc.get("access_url"),
+                )
+        except Exception as e:
+            logger.error(f"Failed to search adopted workloads in get_deployment: {e}")
+
         return None
 
-    async def list_deployments(
+    async def list_deployments(  # noqa: C901
         self,
-        service_id: Optional[str] = None,
-        unode_hostname: Optional[str] = None,
+        service_id: str | None = None,
+        unode_hostname: str | None = None,
         local_only: bool = False,
-    ) -> List[Deployment]:
+    ) -> list[Deployment]:
         """
         List deployments by querying runtime (Docker/K8s).
 
@@ -1276,7 +1354,7 @@ class DeploymentManager:
                         Use this for proxy routing to prevent forwarding to remote
                         environments (e.g. another ushadow instance's services).
         """
-        from src.models.unode import UNodeType, UNodeRole
+        from src.models.unode import UNodeRole, UNodeType
         from src.utils.deployment_targets import parse_deployment_target_id
 
         all_deployments = []
@@ -1336,10 +1414,14 @@ class DeploymentManager:
         logger.debug(f"[list_deployments] Checked {unode_count} unodes, found {len(all_deployments)} deployments so far")
 
         # Also query registered K8s clusters directly (stateless — K8s is source of truth)
-        if not unode_hostname:  # Skip K8s scan when filtering by specific unode hostname
+        # In Docker mode: skip when local_only=True (K8s services are remote, different AUTH_SECRET_KEY).
+        # In K8s mode: always scan — K8s services are the local services, routable via cluster DNS.
+        from src.utils.environment import is_kubernetes as _is_k8s_env
+        _k8s_is_remote = local_only and not _is_k8s_env()
+        if not unode_hostname and not _k8s_is_remote:
             try:
-                from src.services.kubernetes import get_kubernetes_manager
                 from src.services.deployment_platforms import KubernetesDeployPlatform
+                from src.services.kubernetes import get_kubernetes_manager
                 from src.utils.environment import get_env_name
 
                 k8s_mgr = await get_kubernetes_manager()
@@ -1383,13 +1465,16 @@ class DeploymentManager:
                     adopted_query["service_id"] = service_id
                 async for doc in self.adopted_workloads_collection.find(adopted_query):
                     backend_type = doc.get("backend_type", "docker")
+                    # Exclude K8s adopted workloads only in Docker mode with local_only=True.
+                    # In K8s mode they are same-cluster services and should be reachable.
+                    if local_only and backend_type == "kubernetes" and not _is_k8s_env():
+                        continue
                     ports = doc.get("ports", [])
                     exposed_port = None
                     if ports:
-                        try:
+                        import contextlib
+                        with contextlib.suppress(ValueError, IndexError):
                             exposed_port = int(ports[0].split(":")[0])
-                        except (ValueError, IndexError):
-                            pass
 
                     if backend_type == "kubernetes":
                         dep_id = f"adopted-k8s-{doc.get('cluster_id', 'unknown')}-{doc['container_name']}"
@@ -1422,6 +1507,31 @@ class DeploymentManager:
             except Exception as e:
                 logger.warning(f"[list_deployments] Failed to query adopted workloads: {e}")
 
+        # Merge adopted K8s records into their live-scan twins to eliminate duplicates.
+        # Strategy: keep the live-scan record (natural ID, fresh state) and annotate it
+        # with adopted=True so that remove_deployment knows to un-adopt rather than delete.
+        # Adopted records with no live-scan twin (e.g., cross-namespace) are kept as-is.
+        adopted_by_container: dict[str, Deployment] = {
+            dep.container_name: dep
+            for dep in all_deployments
+            if dep.metadata.get("adopted") and dep.backend_type == "kubernetes"
+        }
+        if adopted_by_container:
+            merged_containers: set[str] = set()
+            result: list[Deployment] = []
+            for dep in all_deployments:
+                if dep.metadata.get("adopted") and dep.backend_type == "kubernetes":
+                    continue  # Handled below after live-scan pass
+                if dep.backend_type == "kubernetes" and dep.container_name in adopted_by_container:
+                    dep.metadata["adopted"] = True  # Annotate: prefer un-adopt on remove
+                    merged_containers.add(dep.container_name)
+                result.append(dep)
+            # Keep adopted records that have no live-scan twin (e.g., different namespace)
+            for dep in adopted_by_container.values():
+                if dep.container_name not in merged_containers:
+                    result.append(dep)
+            all_deployments = result
+
         logger.debug(f"[list_deployments] Total deployments: {len(all_deployments)}")
         return all_deployments
 
@@ -1429,7 +1539,7 @@ class DeploymentManager:
         self,
         deployment_id: str,
         tail: int = 100
-    ) -> Optional[str]:
+    ) -> str | None:
         """Get logs for a deployment."""
         deployment = await self.get_deployment(deployment_id)
         if not deployment:
@@ -1444,7 +1554,7 @@ class DeploymentManager:
         unode = UNode(**unode_dict)
 
         # Create deployment target from unode with standardized fields
-        from src.models.unode import UNodeType, UNodeRole
+        from src.models.unode import UNodeRole, UNodeType
         from src.utils.deployment_targets import parse_deployment_target_id
 
         parsed = parse_deployment_target_id(unode.deployment_target_id)
@@ -1479,13 +1589,13 @@ class DeploymentManager:
     # Node Communication
     # =========================================================================
 
-    async def _get_node_url(self, unode: Dict[str, Any]) -> str:
+    async def _get_node_url(self, unode: dict[str, Any]) -> str:
         """Get the manager API URL for a u-node."""
         # Prefer Tailscale IP for cross-node communication
         ip = unode.get("tailscale_ip") or unode.get("hostname")
         return f"http://{ip}:{MANAGER_PORT}"
 
-    async def _get_node_secret(self, unode: Dict[str, Any]) -> str:
+    async def _get_node_secret(self, unode: dict[str, Any]) -> str:
         """Get the secret for authenticating with a u-node."""
         # Secret is stored encrypted - need to decrypt it
         encrypted_secret = unode.get("unode_secret_encrypted", "")
@@ -1508,10 +1618,10 @@ class DeploymentManager:
 
     async def _send_deploy_command(
         self,
-        unode: Dict[str, Any],
+        unode: dict[str, Any],
         resolved_service: ResolvedServiceDefinition,
         container_name: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Send deploy command to a u-node.
 
@@ -1563,9 +1673,9 @@ class DeploymentManager:
 
     async def _send_stop_command(
         self,
-        unode: Dict[str, Any],
+        unode: dict[str, Any],
         container_name: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Send stop command to a u-node."""
         session = await self._get_session()
         url = await self._get_node_url(unode)
@@ -1582,9 +1692,9 @@ class DeploymentManager:
 
     async def _send_restart_command(
         self,
-        unode: Dict[str, Any],
+        unode: dict[str, Any],
         container_name: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Send restart command to a u-node."""
         session = await self._get_session()
         url = await self._get_node_url(unode)
@@ -1601,9 +1711,9 @@ class DeploymentManager:
 
     async def _send_remove_command(
         self,
-        unode: Dict[str, Any],
+        unode: dict[str, Any],
         container_name: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Send remove command to a u-node."""
         session = await self._get_session()
         url = await self._get_node_url(unode)
@@ -1620,10 +1730,10 @@ class DeploymentManager:
 
     async def _send_logs_command(
         self,
-        unode: Dict[str, Any],
+        unode: dict[str, Any],
         container_name: str,
         tail: int = 100
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get logs from a container on a u-node."""
         session = await self._get_session()
         url = await self._get_node_url(unode)
@@ -1643,7 +1753,7 @@ class DeploymentManager:
     # Find & Adopt
     # =========================================================================
 
-    async def find_workloads(self, service_name: str) -> List[DiscoveredWorkload]:
+    async def find_workloads(self, service_name: str) -> list[DiscoveredWorkload]:  # noqa: C901
         """
         Search Docker and all K8s clusters for workloads matching service_name.
 
@@ -1652,7 +1762,7 @@ class DeploymentManager:
 
         Returns both already-adopted and unadopted results.
         """
-        results: List[DiscoveredWorkload] = []
+        results: list[DiscoveredWorkload] = []
         name_lower = service_name.lower()
 
         # Pre-load adopted container names from MongoDB for both Docker and K8s.
@@ -1713,7 +1823,6 @@ class DeploymentManager:
                         if name_lower not in dep.metadata.name.lower():
                             continue
                         ns = dep.metadata.namespace
-                        dep_labels = dep.metadata.labels or {}
                         containers = dep.spec.template.spec.containers or []
                         image = containers[0].image if containers else "unknown"
                         ready = dep.status.ready_replicas or 0
@@ -1770,7 +1879,7 @@ class DeploymentManager:
         The workload is NOT restarted or otherwise modified.
         """
         import re
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Derive a valid ServiceConfig ID from the container name
         safe_name = re.sub(r'[^a-z0-9-]', '-', req.container_name.lower())
@@ -1780,8 +1889,8 @@ class DeploymentManager:
         # Create a ServiceConfig so the adopted service appears in the wiring UI
         # and is configurable. Skip silently if it already exists.
         try:
-            from src.services.service_config_manager import get_service_config_manager
             from src.models.service_config import ServiceConfigCreate
+            from src.services.service_config_manager import get_service_config_manager
             config_manager = get_service_config_manager()
             if not config_manager.get_service_config(config_id):
                 backend_label = "Kubernetes" if req.backend_type == "kubernetes" else "Docker"
@@ -1823,10 +1932,9 @@ class DeploymentManager:
             namespace_val = req.namespace or "default"
             port = 8000
             if req.ports:
-                try:
+                import contextlib
+                with contextlib.suppress(ValueError, IndexError):
                     port = int(str(req.ports[0]).split(":")[-1])
-                except (ValueError, IndexError):
-                    pass
             svc_access_url = await k8s_mgr.get_service_access_url(
                 req.cluster_id, req.container_name, namespace_val, port
             )
@@ -1903,7 +2011,7 @@ class DeploymentManager:
         )
 
 
-    async def resolve_service_url(self, name: str) -> str:
+    async def resolve_service_url(self, name: str) -> str:  # noqa: C901
         """
         Resolve the internal URL for a named service.
 
@@ -1921,10 +2029,8 @@ class DeploymentManager:
         Raises:
             ValueError: service not found or not reachable
         """
-        import os
-        from src.services.docker_manager import get_docker_manager
         from src.services.compose_registry import get_compose_registry
-        from src.utils.environment import is_kubernetes
+        from src.services.docker_manager import get_docker_manager
 
         compose_registry = get_compose_registry()
         docker_mgr = get_docker_manager()
@@ -1969,11 +2075,10 @@ class DeploymentManager:
             ports = docker_mgr.get_service_ports(name)
             port = 8000
             if ports:
+                import contextlib
                 raw = ports[0].get("container_port", 8000)
-                try:
+                with contextlib.suppress(ValueError, TypeError):
                     port = int(raw)
-                except (ValueError, TypeError):
-                    pass
             try:
                 container = docker_mgr._client.containers.get(info.container_id)
                 return f"http://{container.name}:{port}"
@@ -2030,7 +2135,7 @@ class DeploymentManager:
 
 
 # Global instance
-_deployment_manager: Optional[DeploymentManager] = None
+_deployment_manager: DeploymentManager | None = None
 
 
 def get_deployment_manager() -> DeploymentManager:

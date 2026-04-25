@@ -216,6 +216,15 @@ pub async fn discover_environments_with_config(
         }
     };
 
+    // Extract project_name from main_repo if available
+    let project_name = main_repo.as_ref().and_then(|repo| {
+        std::path::Path::new(repo)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|s| s.to_string())
+    });
+
+
     let docker_ok = docker_installed && docker_running;
 
     // Default paths
@@ -444,6 +453,7 @@ pub async fn discover_environments_with_config(
             is_worktree: true,
             created_at: final_created_at,
             base_branch,
+            project_name: project_name.clone(),
         });
     }
 
@@ -505,6 +515,7 @@ pub async fn discover_environments_with_config(
             is_worktree: false,
             created_at: info.created_at,
             base_branch,
+            project_name: project_name.clone(),
         });
     }
 

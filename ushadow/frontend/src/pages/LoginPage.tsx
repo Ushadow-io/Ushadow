@@ -1,6 +1,7 @@
 import React from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useCasdoorAuth } from '../contexts/CasdoorAuthContext'
+import { useSettings } from '../contexts/SettingsContext'
 import AuthHeader from '../components/auth/AuthHeader'
 import { LogIn, ExternalLink, UserPlus } from 'lucide-react'
 import { setupApi } from '../services/api'
@@ -9,6 +10,7 @@ export default function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { isAuthenticated, isLoading, login, register } = useCasdoorAuth()
+  const { isLoading: settingsLoading } = useSettings()
   const [hasUsers, setHasUsers] = React.useState<boolean | null>(null)
 
   // Parse query parameters once
@@ -178,7 +180,7 @@ export default function LoginPage() {
               )}
               <button
                 onClick={handleLogin}
-                disabled={hasUsers === false}
+                disabled={hasUsers === false || settingsLoading}
                 className="w-full flex items-center justify-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40"
                 style={{
                   backgroundColor: '#3b82f6',
@@ -193,7 +195,8 @@ export default function LoginPage() {
 
               <button
                 onClick={handleRegister}
-                className="w-full flex items-center justify-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2"
+                disabled={settingsLoading}
+                className="w-full flex items-center justify-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40"
                 style={{
                   backgroundColor: '#9333ea',
                   color: '#ffffff',
