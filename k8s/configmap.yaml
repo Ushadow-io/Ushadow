@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ushadow-config
+  namespace: ushadow
+data:
+  ENV_NAME: "ushadow"
+  CASDOOR_URL: "http://casdoor.root.svc.cluster.local:8000"
+  CASDOOR_EXTERNAL_URL: "https://door.spangled-kettle.ts.net"
+  USHADOW_PUBLIC_URL: "https://ush.spangled-kettle.ts.net"
+  APP_PUBLIC_URL: "https://ush.spangled-kettle.ts.net"

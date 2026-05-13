@@ -50,6 +50,8 @@ build_and_push() {
     local context="$1"
     local dockerfile="$2"
     local image_name="$3"
+    shift 3
+    local build_args=("$@")
     local full_image="${REGISTRY}/${image_name}:${TAG}"
 
     if [[ ! -d "$context" ]]; then
@@ -68,13 +70,12 @@ build_and_push() {
     info "  Platforms:  ${PLATFORMS}"
     info "---------------------------------------------"
 
-    docker buildx build \
-        --builder "$BUILDER_NAME" \
-        --platform "$PLATFORMS" \
-        --tag "$full_image" \
-        --file "$dockerfile" \
-        --push \
-        "$context"
+    local buildx_args=("--builder" "$BUILDER_NAME" "--platform" "$PLATFORMS" "--tag" "$full_image" "--file" "$dockerfile" "--push")
+    for arg in "${build_args[@]}"; do
+        buildx_args+=("--build-arg" "$arg")
+    done
+
+    docker buildx build "${buildx_args[@]}" "$context"
 
     info "✅ Pushed: ${full_image}"
     echo ""
@@ -176,11 +177,17 @@ case "$SERVICE" in
             "ushadow/backend/Dockerfile" \
             "ushadow-backend"
 
-        # Build frontend
+        # Load k8s environment variables for frontend build
+        if [[ -f "k8s/.env.k8s" ]]; then
+            set +a; source k8s/.env.k8s; set -a
+        fi
+
+        # Build frontend with Casdoor URL
         build_and_push \
             "ushadow/frontend" \
             "ushadow/frontend/Dockerfile" \
-            "ushadow-frontend"
+            "ushadow-frontend" \
+            "VITE_CASDOOR_URL=${CASDOOR_EXTERNAL_URL:-http://localhost:8082}"
 
         info "============================================="
         info "ushadow images pushed successfully!"

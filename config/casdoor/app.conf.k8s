@@ -1,0 +1,22 @@
+appname = casdoor
+httpport = 8000
+runmode = prod
+SessionOn = true
+copyrequestbody = true
+origin = https://door.spangled-kettle.ts.net
+
+driverName = postgres
+dataSourceName = "user=casdoor password=MED$4pstnnut host=postgres-postgresql.root.svc.cluster.local. port=5432 sslmode=disable dbname=casdoor"
+dbName = casdoor
+tableNamePrefix =
+showSql = false
+
+redisEndpoint =
+defaultStorageProvider =
+isCloudIntranet = false
+authState = "casdoor"
+socks5Proxy = ""
+verificationCodeTimeout = 10
+initScore = 2000
+logPostOnly = true
+staticBaseUrl = "https://cdn.casbin.org"

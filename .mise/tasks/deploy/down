@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+#MISE description="Stop services for an environment"
+#USAGE flag "-e --env <env>" help="Target environment" default="local" {
+#USAGE   choices "local" "staging" "production"
+#USAGE }
+
+set -euo pipefail
+
+ENV="${usage_env:-local}"
+
+# Match the convention from deploy:up: local → .env, others → .env.<env>
+if [[ "$ENV" == "local" ]]; then
+  ENV_FILE=".env"
+else
+  ENV_FILE=".env.$ENV"
+fi
+
+echo "Deploy down → $ENV  (env-file: $ENV_FILE)"
+docker compose --env-file "$ENV_FILE" down

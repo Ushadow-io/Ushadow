@@ -80,9 +80,8 @@ COPY ushadow/backend/ .
 # These contain x-ushadow metadata needed regardless of deployment method
 COPY compose/ /compose/
 
-# Copy config files from project root (default configuration, wiring, capabilities)
-# These are needed for service configuration and capability resolution
-COPY config/ /config/
+# Note: config/ is NOT copied into image - it's mounted as a PVC from k8s
+# This allows bidirectional sync with local config folder
 
 # Expose port (default 8000, override with PORT env var)
 EXPOSE 8000

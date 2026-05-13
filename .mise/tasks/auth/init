@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#MISE description="Scaffold Casdoor (config, compose, justfile, auth templates)"
+#USAGE flag "--app-name <name>" help="App name to substitute in templates (default: from .env or interactive prompt)"
+#USAGE flag "--force" help="Overwrite existing files"
+#USAGE flag "--no-env-write" help="Print .env vars instead of appending them"
+
+set -euo pipefail
+
+EXTRA=()
+[[ -n "${usage_app_name:-}" ]] && EXTRA+=(--app-name "$usage_app_name")
+[[ "${usage_force:-false}" == "true" ]] && EXTRA+=(--force)
+[[ "${usage_no_env_write:-false}" == "true" ]] && EXTRA+=(--no-env-write)
+
+# `${EXTRA[@]+"${EXTRA[@]}"}` expands to the array contents if non-empty,
+# or to nothing at all if empty — avoids the bash 3.2 unbound-var error
+# under `set -u` when no flags were passed.
+exec uvx --from "git+https://github.com/Ushadow-io/ushadow-sdk" casdoor-init ${EXTRA[@]+"${EXTRA[@]}"}

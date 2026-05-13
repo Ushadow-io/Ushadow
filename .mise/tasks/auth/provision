@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+#MISE description="Apply orgs/apps/roles/groups from config/casdoor/*.yaml to running Casdoor"
+#USAGE flag "--env-file <file>" help="Env file to read (default: .env)"
+#USAGE flag "--config-dir <dir>" help="Directory with Casdoor YAML config (default: ./config/casdoor)"
+
+set -euo pipefail
+
+EXTRA=()
+[[ -n "${usage_env_file:-}" ]] && EXTRA+=(--env-file "$usage_env_file")
+[[ -n "${usage_config_dir:-}" ]] && EXTRA+=(--config-dir "$usage_config_dir")
+
+exec uvx --from "git+https://github.com/Ushadow-io/ushadow-sdk" casdoor-provision ${EXTRA[@]+"${EXTRA[@]}"}

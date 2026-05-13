@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#MISE description="Start services for an environment"
+#USAGE flag "-e --env <env>" help="Target environment" default="local" {
+#USAGE   choices "local" "staging" "production"
+#USAGE }
+#USAGE flag "--dry-run" help="Print what would run without executing"
+
+set -euo pipefail
+
+ENV="${usage_env:-local}"
+DRY_RUN="${usage_dry_run:-false}"
+
+# Convention: local uses .env (matches what casdoor-init and most tools write to).
+# Other environments use .env.<env> so they can coexist with the local file.
+if [[ "$ENV" == "local" ]]; then
+  ENV_FILE=".env"
+else
+  ENV_FILE=".env.$ENV"
+fi
+
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "error: $ENV_FILE not found" >&2
+  exit 1
+fi
+
+echo "Deploy up → $ENV  (env-file: $ENV_FILE)"
+
+if [[ "$DRY_RUN" == "true" ]]; then
+  echo "[dry-run] docker compose --env-file $ENV_FILE up -d"
+  exit 0
+fi
+
+docker compose --env-file "$ENV_FILE" up -d

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#MISE description="Run linters (ruff for Python, eslint for JS/TS)"
+#USAGE flag "--fix" help="Auto-fix issues where possible"
+
+set -euo pipefail
+
+FIX="${usage_fix:-false}"
+
+# Python
+if [[ -f "pyproject.toml" ]]; then
+  if [[ "$FIX" == "true" ]]; then
+    uv run ruff check --fix . && uv run ruff format .
+  else
+    uv run ruff check . && uv run ruff format --check .
+  fi
+fi
+
+# JS/TS
+if [[ -f "package.json" ]]; then
+  if [[ "$FIX" == "true" ]]; then
+    pnpm lint --fix
+  else
+    pnpm lint
+  fi
+fi

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#MISE description="Run database migrations"
+#USAGE flag "-e --env <env>" help="Target environment" default="local" {
+#USAGE   choices "local" "staging" "production"
+#USAGE }
+
+set -euo pipefail
+
+ENV="${usage_env:-local}"
+
+echo "DB migrate → $ENV"
+# Replace with your migration command e.g. alembic upgrade head
+uv run alembic upgrade head

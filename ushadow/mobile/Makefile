@@ -10,12 +10,12 @@ endif
 help:
 	@echo "ushadow Mobile - Build & Deployment Commands"
 	@echo ""
-	@echo "🚀 Fastlane (FASTEST - recommended!):"
+	@echo "🚀 Fastlane (FASTEST - recommended! from ushadow-sdk):"
 	@echo "  make env-setup           - Configure Apple ID and credentials (.env.local)"
+	@echo "  make fastlane-setup      - Install Fastlane and dependencies"
 	@echo "  make fastlane-beta       - Build and upload to TestFlight (5-10 min, no queues!)"
 	@echo "  make fastlane-build      - Build iOS app only"
 	@echo "  make fastlane-submit     - Submit existing build to TestFlight"
-	@echo "  make fastlane-setup      - Install Fastlane and dependencies"
 	@echo ""
 	@echo "Cloud Builds (slower, uses EAS builders):"
 	@echo "  make build-ios           - Build production iOS app for TestFlight/App Store"
@@ -194,57 +194,18 @@ env-setup:
 	echo "  2. Run: make fastlane-beta"; \
 	echo "════════════════════════════════════════════════════════════"
 
-# Setup Fastlane and dependencies
+# Setup Fastlane and dependencies (delegates to ushadow-sdk)
 fastlane-setup:
-	@echo "════════════════════════════════════════════════════════════"
-	@echo "Setting up Fastlane"
-	@echo "════════════════════════════════════════════════════════════"
-	@echo "Installing Ruby gems (Fastlane)..."
-	@which bundle > /dev/null || gem install bundler
-	bundle install
-	@echo ""
-	@echo "✅ Fastlane installed!"
-	@echo ""
-	@echo "Next steps:"
-	@echo "  1. Configure your Apple ID:"
-	@echo "     make env-setup"
-	@echo "  2. Deploy to TestFlight:"
-	@echo "     make fastlane-beta"
-	@echo "════════════════════════════════════════════════════════════"
+	@bash ../../mycelia/myceliasdk/scripts/fastlane-setup.sh
 
 # Build and upload to TestFlight using Fastlane (FASTEST!)
 fastlane-beta:
-	@echo "════════════════════════════════════════════════════════════"
-	@echo "🚀 Fastlane: Build and Upload to TestFlight"
-	@echo "════════════════════════════════════════════════════════════"
-	@echo "This is the FASTEST deployment method:"
-	@echo "  ✓ No EAS queues"
-	@echo "  ✓ Direct to Apple"
-	@echo "  ✓ Total time: ~5-10 minutes"
-	@echo ""
-	@echo "Process:"
-	@echo "  1. Increment build number"
-	@echo "  2. Build iOS app"
-	@echo "  3. Upload directly to App Store Connect"
-	@echo "════════════════════════════════════════════════════════════"
-	@echo ""
-	bundle exec fastlane beta
-	@echo ""
-	@echo "════════════════════════════════════════════════════════════"
-	@echo "✅ Deployment complete!"
-	@echo "════════════════════════════════════════════════════════════"
-	@echo "📱 Build will appear in TestFlight in ~5-10 minutes"
-	@echo "════════════════════════════════════════════════════════════"
+	@bash ../../mycelia/myceliasdk/scripts/fastlane-beta.sh
 
 # Build iOS app using Fastlane (no upload)
 fastlane-build:
-	@echo "Building iOS app with Fastlane..."
-	bundle exec fastlane build
-	@echo "✅ Build complete! IPA saved to ./build/"
+	@bash ../../mycelia/myceliasdk/scripts/fastlane-build.sh
 
 # Submit existing build to TestFlight using Fastlane
 fastlane-submit:
-	@echo "Submitting to TestFlight with Fastlane..."
-	@echo "Note: This uses the most recent build from ./build/"
-	bundle exec fastlane submit
-	@echo "✅ Submitted to TestFlight!"
+	@bash ../../mycelia/myceliasdk/scripts/fastlane-submit.sh

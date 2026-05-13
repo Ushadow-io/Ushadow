@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+#MISE description="First-time environment setup: install toolchain + project dependencies"
+#USAGE flag "--no-pnpm" help="Skip pnpm install even if package.json exists"
+#USAGE flag "--no-uv"   help="Skip uv sync even if pyproject.toml exists"
+
+set -euo pipefail
+
+NO_PNPM="${usage_no_pnpm:-false}"
+NO_UV="${usage_no_uv:-false}"
+
+echo "==> mise install (toolchain)"
+mise install
+
+if [[ -f "pyproject.toml" && "$NO_UV" != "true" ]]; then
+  echo "==> uv sync (Python deps)"
+  uv sync
+fi
+
+if [[ -f "package.json" && "$NO_PNPM" != "true" ]]; then
+  # Ensure corepack is enabled — it activates pnpm from package.json's
+  # `packageManager` field. Idempotent, but needs to run before `pnpm`.
+  if command -v corepack &>/dev/null; then
+    corepack enable 2>/dev/null || true
+  else
+    echo "==> [warn] corepack not found — \`pnpm\` may not be available."
+    echo "    Make sure node is installed (mise should have done this)."
+  fi
+
+  if [[ -f "pnpm-lock.yaml" ]]; then
+    echo "==> pnpm install --frozen-lockfile (Node deps, locked)"
+    pnpm install --frozen-lockfile
+  else
+    echo "==> pnpm install (Node deps, no lockfile yet)"
+    pnpm install
+  fi
+fi
+
+echo "==> done. Run \`mise tasks\` to see what's available."

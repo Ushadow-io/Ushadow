@@ -43,7 +43,7 @@ class KubernetesManager:
     """
 
     def __init__(self, db: AsyncIOMotorDatabase):
-        kubeconfig_dir = Path(os.getenv("KUBECONFIG_DIR", "/app/data/kubeconfigs"))
+        kubeconfig_dir = Path(os.getenv("KUBECONFIG_DIR", "/config/kubeconfigs"))
         self._k8s_client = KubernetesClient(kubeconfig_dir)
         self._store = KubernetesClusterStore(db, self._k8s_client)
         self._builder = KubernetesManifestBuilder()

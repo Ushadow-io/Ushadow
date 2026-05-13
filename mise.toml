@@ -1,0 +1,31 @@
+[tools]
+# Toolchain pins inherited by every project bootstrapped from this SDK.
+# Update here, run `mise install`, and downstream projects pick it up on next install.
+python = "3.12"
+node   = "lts"
+# pnpm is managed by corepack (built into Node 16+) — NOT by mise.
+# Why: mise's pnpm backends are inconsistent across versions (aqua has stale
+# macOS asset names; npm:/ubi: prefixes aren't always recognised). Corepack
+# is the JS ecosystem's canonical answer — it reads the `packageManager`
+# field from each project's package.json and activates that exact pnpm
+# version transparently.
+#
+# One-time setup:        corepack enable
+# Pin per project:       set `"packageManager": "pnpm@10.5.2"` in package.json
+# See:                   playbook/standards/typescript.md
+uv     = "latest"
+
+[env]
+# Hardlink uv's global cache into project venvs (already the default on macOS/Linux,
+# pinning here so a global override can't silently fall back to copy mode).
+UV_LINK_MODE          = "hardlink"
+PYTHONDONTWRITEBYTECODE = "1"
+# pnpm's global content-addressable store — keeps node_modules small across worktrees.
+PNPM_HOME             = "{{env.HOME}}/.local/share/pnpm"
+
+[settings]
+task_output = "prefix"
+
+# Tasks live as executable files under .mise/tasks/<group>/<name>.
+# Run `mise tasks` to list, `mise run <name>` to execute.
+# Shell completion (zsh: `eval "$(mise completion zsh)"`) makes a custom menu unnecessary.

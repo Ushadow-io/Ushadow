@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+#MISE description="Render app.conf, ensure networks, start Casdoor container, wait for health"
+#USAGE flag "--env-file <file>" help="Env file to load (default: .env)"
+#USAGE flag "--compose-file <file>" help="Compose file (default: compose/casdoor.yml)"
+#USAGE flag "--timeout <seconds>" help="Health-check timeout in seconds (default: 120)"
+
+set -euo pipefail
+
+EXTRA=()
+[[ -n "${usage_env_file:-}" ]] && EXTRA+=(--env-file "$usage_env_file")
+[[ -n "${usage_compose_file:-}" ]] && EXTRA+=(--compose-file "$usage_compose_file")
+[[ -n "${usage_timeout:-}" ]] && EXTRA+=(--timeout "$usage_timeout")
+
+exec uvx --from "git+https://github.com/Ushadow-io/ushadow-sdk" casdoor-start ${EXTRA[@]+"${EXTRA[@]}"}

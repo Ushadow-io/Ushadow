@@ -209,3 +209,14 @@ await wizard.startQuickstart()
 await wizard.fillApiKey('openai_api_key', 'sk-test')
 await wizard.next()
 ```
+
+## Shared Ecosystem Skills
+
+Skills are in `.claude/skills/`. Read the relevant file directly — do not use the Skill tool for these.
+
+| Trigger | Skill file |
+|---|---|
+| Extracting, reusing, or sharing code across projects | `.claude/skills/extract-component.md` |
+| Using `@ushadow/ui`, `ushadow-common`, or any shared dep | `.claude/skills/use-shared.md` |
+| Questions about repo conventions, versioning, ecosystem structure | `.claude/skills/shared-ecosystem.md` |
+| Deploying a service, creating a namespace, or wiring k8s network policies | `.claude/skills/k8s-service.md` |

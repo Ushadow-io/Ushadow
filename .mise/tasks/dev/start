@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#MISE description="Start local development server"
+
+set -euo pipefail
+
+echo "Starting dev server..."
+# Override in your project's .mise/tasks/dev/start

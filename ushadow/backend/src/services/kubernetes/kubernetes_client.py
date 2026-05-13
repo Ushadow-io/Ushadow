@@ -5,7 +5,6 @@ import hashlib
 import os
 import subprocess
 from pathlib import Path
-from typing import Tuple
 
 from cryptography.fernet import Fernet, InvalidToken
 from kubernetes import client, config
@@ -38,9 +37,13 @@ class KubernetesClient:
 
         try:
             secret = get_auth_secret_key().encode()
+            logger.debug("Using auth secret key from get_auth_secret_key()")
         except ValueError:
             secret = b"default-secret-key"
+            logger.warning("get_auth_secret_key() raised ValueError, falling back to default")
         key = hashlib.sha256(secret).digest()
+        key_hash = base64.b16encode(key[:8]).decode()
+        logger.debug(f"Fernet key initialized (first 8 bytes hash: {key_hash})")
         fernet_key = base64.urlsafe_b64encode(key)
         return Fernet(fernet_key)
 
@@ -85,7 +88,7 @@ class KubernetesClient:
     # K8s API client factory
     # -------------------------------------------------------------------------
 
-    def get_kube_client(self, cluster_id: str) -> Tuple[client.CoreV1Api, client.AppsV1Api]:
+    def get_kube_client(self, cluster_id: str) -> tuple[client.CoreV1Api, client.AppsV1Api]:
         """
         Return (CoreV1Api, AppsV1Api) for the given cluster.
 
@@ -98,18 +101,37 @@ class KubernetesClient:
         encrypted_path = self._kubeconfig_dir / f"{cluster_id}.enc"
         legacy_path = self._kubeconfig_dir / f"{cluster_id}.yaml"
 
+        logger.debug(f"Looking for kubeconfig in: {self._kubeconfig_dir}")
+        logger.debug(f"Encrypted path: {encrypted_path} (exists={encrypted_path.exists()})")
+        logger.debug(f"Legacy path: {legacy_path} (exists={legacy_path.exists()})")
+
         if encrypted_path.exists():
             try:
+                logger.debug(f"Reading encrypted kubeconfig from {encrypted_path}")
                 encrypted_data = encrypted_path.read_bytes()
+                logger.debug(f"Encrypted data size: {len(encrypted_data)} bytes")
+                is_fernet = encrypted_data.startswith(b'gAAAAAA')
+                logger.debug(f"Data appears to be Fernet-encrypted: {is_fernet}")
                 kubeconfig_yaml = self.decrypt_kubeconfig(encrypted_data)
-            except InvalidToken:
-                raise ValueError(f"Failed to decrypt kubeconfig for cluster {cluster_id}")
+                logger.debug(f"Successfully decrypted kubeconfig ({len(kubeconfig_yaml)} chars)")
+            except InvalidToken as e:
+                logger.error(
+                    f"Failed to decrypt kubeconfig - InvalidToken. "
+                    f"Cluster: {cluster_id}, Data size: {len(encrypted_data)} bytes, "
+                    f"Error: {str(e) or '(empty error message)'}"
+                )
+                raise ValueError(f"Failed to decrypt kubeconfig for cluster {cluster_id}") from e
+            except Exception as e:
+                logger.error(f"Failed to decrypt kubeconfig - {type(e).__name__}: {e}")
+                raise ValueError(f"Failed to decrypt kubeconfig for cluster {cluster_id}: {e}") from e
 
             temp_path = self._kubeconfig_dir / f".tmp_{cluster_id}.yaml"
             temp_path.write_text(kubeconfig_yaml)
             os.chmod(temp_path, 0o600)
             try:
+                logger.debug(f"Loading kubeconfig from temp file: {temp_path}")
                 config.load_kube_config(config_file=str(temp_path))
+                logger.debug(f"Successfully loaded kubeconfig for cluster {cluster_id}")
                 return client.CoreV1Api(), client.AppsV1Api()
             finally:
                 if temp_path.exists():
@@ -121,9 +143,10 @@ class KubernetesClient:
             return client.CoreV1Api(), client.AppsV1Api()
 
         else:
+            logger.error(f"Kubeconfig not found - checked: {encrypted_path}, {legacy_path}")
             raise FileNotFoundError(f"Kubeconfig not found for cluster {cluster_id}")
 
-    def get_kubeconfig_file_for_subprocess(self, cluster_id: str) -> Tuple[str, Path | None]:
+    def get_kubeconfig_file_for_subprocess(self, cluster_id: str) -> tuple[str, Path | None]:
         """
         Resolve a kubeconfig file path suitable for passing to subprocesses (helm, kubectl).
 
@@ -144,11 +167,10 @@ class KubernetesClient:
             os.chmod(temp_path, 0o600)
             return str(temp_path), temp_path
 
-        elif legacy_path.exists():
+        if legacy_path.exists():
             return str(legacy_path), None
 
-        else:
-            raise FileNotFoundError(f"Kubeconfig not found for cluster {cluster_id}")
+        raise FileNotFoundError(f"Kubeconfig not found for cluster {cluster_id}")
 
     # -------------------------------------------------------------------------
     # kubectl wrapper
@@ -182,7 +204,7 @@ class KubernetesClient:
             return result.stdout
         except subprocess.CalledProcessError as e:
             logger.error(f"kubectl command failed: {e.stderr}")
-            raise Exception(f"kubectl command failed: {e.stderr}")
+            raise Exception(f"kubectl command failed: {e.stderr}") from e
         finally:
             if temp_path and temp_path.exists():
                 temp_path.unlink()

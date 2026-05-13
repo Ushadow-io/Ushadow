@@ -18,11 +18,13 @@ COPY . .
 # Build arguments for environment variables (baked in at build time)
 ARG VITE_API_URL
 ARG VITE_CHRONICLE_URL
+ARG VITE_CASDOOR_URL
 ARG VITE_ENV_NAME
 
 # Make build args available as env vars during build
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_CHRONICLE_URL=$VITE_CHRONICLE_URL
+ENV VITE_CASDOOR_URL=$VITE_CASDOOR_URL
 ENV VITE_ENV_NAME=$VITE_ENV_NAME
 
 # Build the application

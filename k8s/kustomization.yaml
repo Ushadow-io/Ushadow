@@ -6,10 +6,10 @@ namespace: ushadow
 resources:
   - namespace.yaml
   - configmap.yaml
+  - config-pvc.yaml
   # secret.yaml intentionally NOT included.
   # ushadow-secret is the single responsibility of `just k8s-apply-secret`,
   # which sources it from config/SECRETS/secrets_k8s.yaml (gitignored).
-  # skaffold's `deploy.hooks.before` runs that command pre-deploy.
   - infra/
   - base/
   # - tweaks/ingress-example.yaml  # Uncomment when ready

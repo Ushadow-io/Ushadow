@@ -39,4 +39,11 @@ spec:
           ports:
             - containerPort: 8000
               protocol: TCP
+          volumeMounts:
+            - name: config-volume
+              mountPath: /config
+      volumes:
+        - name: config-volume
+          persistentVolumeClaim:
+            claimName: ushadow-config
       restartPolicy: Always

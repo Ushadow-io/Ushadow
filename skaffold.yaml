@@ -13,6 +13,8 @@ build:
       context: ushadow/frontend
       docker:
         dockerfile: Dockerfile
+        buildArgs:
+          VITE_CASDOOR_URL: ${VITE_CASDOOR_URL:-http://localhost:8082}
   tagPolicy:
     dateTime:
       format: "2006-01-02_15-04-05"
@@ -26,13 +28,7 @@ deploy:
   kubectl: {}
   # ushadow-secret is intentionally NOT in the kustomize bundle.
   # It's sourced from config/SECRETS/secrets_k8s.yaml (gitignored) and applied
-  # by `just k8s-apply-secret`. Running it here makes `skaffold dev` idempotent
-  # and guarantees the secret exists before any Deployment references it.
-  hooks:
-    before:
-      - host:
-          command: ["just", "k8s-apply-secret"]
-          os: [darwin, linux]
+  # manually via: kubectl apply -f config/SECRETS/secrets_k8s.yaml
 
 manifests:
   kustomize:

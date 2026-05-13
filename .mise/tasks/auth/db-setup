@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+#MISE description="Create Casdoor Postgres user + database (run once before first start)"
+#USAGE flag "--env-file <file>" help="Env file to read (default: .env)"
+#USAGE flag "--dry-run" help="Print SQL that would run, don't execute"
+
+set -euo pipefail
+
+EXTRA=()
+[[ -n "${usage_env_file:-}" ]] && EXTRA+=(--env-file "$usage_env_file")
+[[ "${usage_dry_run:-false}" == "true" ]] && EXTRA+=(--dry-run)
+
+exec uvx --from "git+https://github.com/Ushadow-io/ushadow-sdk" casdoor-db-setup ${EXTRA[@]+"${EXTRA[@]}"}
