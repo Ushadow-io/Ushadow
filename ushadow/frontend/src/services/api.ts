@@ -240,7 +240,7 @@ export const settingsApi = {
   getSecret: (keyPath: string) => api.get<{ value: string }>(`/api/settings/secret/${keyPath}`),
 
   /** Get unmasked Mycelia client_id and token for UI display */
-  getMyceliaCredentials: () => api.get<{ client_id: string; token: string; app_url: string | null; api_endpoint: string | null }>('/api/settings/mycelia-credentials'),
+  getMyceliaCredentials: () => api.get<{ client_id: string; token: string }>('/api/settings/mycelia-credentials'),
 
   // Service-specific config namespace
   getAllServiceConfigs: () => api.get('/api/settings/service-configs'),

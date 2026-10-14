@@ -74,37 +74,14 @@ async def get_config():
 
 @router.get("/mycelia-credentials")
 async def get_mycelia_credentials():
-    """Return the stored Mycelia client_id and token unmasked for UI display.
-
-    Also returns the Mycelia app/api origins (dedicated Tailscale ingresses
-    `mycelia.<tailnet>` / `mycelia-api.<tailnet>`) so the settings UI can deep-link
-    a credential reset into the Mycelia app. app_url is None when no tailnet
-    suffix is configured (e.g. local docker) — the UI then hides that action.
-    """
+    """Return the stored Mycelia client_id and token unmasked for UI display."""
     try:
         settings = get_settings()
         client_id = await settings.get("api_keys.mycelia_client_id")
         token = await settings.get("api_keys.mycelia_token")
         if not client_id or not token:
             raise HTTPException(status_code=404, detail="Mycelia credentials not yet provisioned")
-
-        app_url = None
-        api_endpoint = None
-        try:
-            from src.utils.tailscale_serve import get_tailnet_suffix
-            suffix = get_tailnet_suffix()
-            if suffix:
-                app_url = f"https://mycelia.{suffix}"
-                api_endpoint = f"https://mycelia-api.{suffix}"
-        except Exception as e:
-            logger.warning(f"Could not derive Mycelia URLs: {e}")
-
-        return {
-            "client_id": str(client_id),
-            "token": str(token),
-            "app_url": app_url,
-            "api_endpoint": api_endpoint,
-        }
+        return {"client_id": str(client_id), "token": str(token)}
     except HTTPException:
         raise
     except Exception as e:

@@ -37,15 +37,7 @@ export default function SettingsPage() {
   const [tokenError, setTokenError] = useState<string | null>(null)
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [showMyceliaToken, setShowMyceliaToken] = useState(false)
-  // app_url / api_endpoint are the dedicated Mycelia Tailscale origins, returned
-  // by the backend (null on envs without a tailnet suffix, e.g. local docker —
-  // the Reset button then stays hidden since there's no Mycelia origin to open).
-  const [myceliaCredentials, setMyceliaCredentials] = useState<{
-    client_id: string
-    token: string
-    app_url: string | null
-    api_endpoint: string | null
-  } | null>(null)
+  const [myceliaCredentials, setMyceliaCredentials] = useState<{ client_id: string; token: string } | null>(null)
 
   useEffect(() => {
     loadConfig()
@@ -97,26 +89,6 @@ export default function SettingsPage() {
     } finally {
       setProvisioningTokens(false)
     }
-  }
-
-  // Open Mycelia and force-overwrite its stored login with the current
-  // credentials. Creds ride in the URL fragment (#inject=...) — client-only,
-  // never sent to the server — because the Ushadow origin cannot write
-  // Mycelia's localStorage directly. Mycelia's init.js decodes the fragment
-  // and overwrites `mycelia-settings`, then reloads.
-  const handleResetMyceliaLogin = () => {
-    if (!myceliaCredentials?.app_url) return
-    const payload: Record<string, string> = {
-      clientId: myceliaCredentials.client_id,
-      clientSecret: myceliaCredentials.token,
-    }
-    if (myceliaCredentials.api_endpoint) payload.apiEndpoint = myceliaCredentials.api_endpoint
-    const fragment = encodeURIComponent(btoa(JSON.stringify(payload)))
-    window.open(
-      `${myceliaCredentials.app_url.replace(/\/$/, '')}/#inject=${fragment}`,
-      '_blank',
-      'noopener,noreferrer',
-    )
   }
 
   const copyToClipboard = async (text: string, keyName: string) => {
@@ -340,17 +312,6 @@ export default function SettingsPage() {
                 </div>
               </div>
               <div className="flex items-center space-x-2">
-                {myceliaCredentials?.app_url && (
-                  <button
-                    onClick={handleResetMyceliaLogin}
-                    className="btn btn-secondary text-sm"
-                    data-testid="mycelia-reset-login"
-                    title="Open Mycelia and overwrite its stored browser login with these credentials"
-                  >
-                    <Key className="h-4 w-4" />
-                    <span className="ml-1">Reset Mycelia login</span>
-                  </button>
-                )}
                 {apiKeys.some(k => k.name === 'mycelia_token') && (
                   <button
                     onClick={() => handleProvisionMyceliaTokens(true)}

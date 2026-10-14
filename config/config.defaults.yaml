@@ -164,19 +164,6 @@ service_profiles:
       - mycelia-python-worker
       - mem0
 
-# Mycelia (top-level integration settings)
-# These differ per-environment (Tailscale hostname, etc.) so are read at deploy
-# time. Credentials (mycelia_token / mycelia_client_id) still live under
-# api_keys.* in secrets.yaml / secrets_k8s.yaml.
-mycelia:
-  # Public URL the SPA's browser uses to reach the Mycelia backend. Different
-  # from MYCELIA_BACKEND_INTERNAL_URL (cluster DNS, server-to-server) — this
-  # one is what gets written into the SPA's `mycelia-settings.apiEndpoint`
-  # in localStorage. Leave blank to derive from tailnet_suffix at deploy time
-  # (https://mycelia-api.<tailnet>); set explicitly when deploying a frontend
-  # against a backend on a different host or non-Tailscale ingress.
-  backend_public_url: ""
-
 # Feed Configuration
 # Sources are managed here (config.overrides.yaml for user additions).
 # YouTube API key is stored in secrets.yaml under api_keys.youtube_api_key.

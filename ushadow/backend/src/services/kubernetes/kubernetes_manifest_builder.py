@@ -8,10 +8,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from src.models.kubernetes import KubernetesDeploymentSpec
-from src.services.kubernetes.mycelia_runtime_configmap import (
-    build_runtime_configmap as build_mycelia_runtime_configmap,
-    runtime_volume_specs as mycelia_runtime_volume_specs,
-)
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__, prefix="K8s")
@@ -100,24 +96,6 @@ class KubernetesManifestBuilder:
 
         if volumes_to_seed:
             manifests["_volumes_to_seed"] = volumes_to_seed
-
-        # Service-specific runtime injection: mycelia-frontend's SPA loads
-        # /init.js (via the vite transformIndexHtml plugin) before the main
-        # bundle. ushadow renders that file's contents from settings at deploy
-        # time and mounts it over the bundled no-op. See mycelia_runtime_configmap.py
-        # for the rationale. Skipped silently when MYCELIA_BACKEND_PUBLIC_URL is
-        # unset — the bundled no-op then runs unchanged.
-        if name == "mycelia-frontend":
-            runtime_cm = build_mycelia_runtime_configmap(environment, namespace, labels)
-            if runtime_cm is not None:
-                manifests["mycelia_runtime_configmap"] = runtime_cm
-                rt_volume, rt_mounts = mycelia_runtime_volume_specs()
-                k8s_volumes.append(rt_volume)
-                volume_mounts.extend(rt_mounts)
-                logger.info(
-                    "Added mycelia-frontend-runtime ConfigMap and init.js mount "
-                    f"(apiEndpoint={environment.get('MYCELIA_BACKEND_PUBLIC_URL')!r})"
-                )
 
         manifests["deployment"] = self._deployment(
             name, namespace, image, spec, safe_service_id, labels,
