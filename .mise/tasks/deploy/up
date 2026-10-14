@@ -1,33 +1,62 @@
 #!/usr/bin/env bash
 #MISE description="Start services for an environment"
-#USAGE flag "-e --env <env>" help="Target environment" default="local" {
-#USAGE   choices "local" "staging" "production"
-#USAGE }
+#USAGE arg "[env]" help="Target environment: k8s, aca, or omit for docker (default: docker)"
 #USAGE flag "--dry-run" help="Print what would run without executing"
 
 set -euo pipefail
 
-ENV="${usage_env:-local}"
+ENV="${usage_env:-docker}"
 DRY_RUN="${usage_dry_run:-false}"
 
-# Convention: local uses .env (matches what casdoor-init and most tools write to).
-# Other environments use .env.<env> so they can coexist with the local file.
-if [[ "$ENV" == "local" ]]; then
-  ENV_FILE=".env"
-else
-  ENV_FILE=".env.$ENV"
-fi
+case "$ENV" in
+  ""|docker|local)
+    ENV_FILE=".env"
+    ;;
+  *)
+    ENV_FILE=".env.$ENV"
+    ;;
+esac
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "error: $ENV_FILE not found" >&2
   exit 1
 fi
 
-echo "Deploy up → $ENV  (env-file: $ENV_FILE)"
+echo "Deploy up → ${ENV:-docker}  (env-file: $ENV_FILE)"
 
-if [[ "$DRY_RUN" == "true" ]]; then
-  echo "[dry-run] docker compose --env-file $ENV_FILE up -d"
-  exit 0
-fi
+case "$ENV" in
+  ""|docker|local)
+    if [[ "$DRY_RUN" == "true" ]]; then
+      echo "[dry-run] docker compose --env-file $ENV_FILE up -d"
+    else
+      docker compose --env-file "$ENV_FILE" up -d
+    fi
+    ;;
 
-docker compose --env-file "$ENV_FILE" up -d
+  k8s)
+    # Load env vars (KUBECONFIG override, namespace, etc.)
+    set -a; source "$ENV_FILE"; set +a
+    if [[ "$DRY_RUN" == "true" ]]; then
+      echo "[dry-run] kubectl apply -f k8s/"
+    else
+      kubectl apply -f k8s/
+    fi
+    ;;
+
+  aca)
+    # Load ACA vars: expects APP_NAME and ACA_RESOURCE_GROUP in .env.aca
+    set -a; source "$ENV_FILE"; set +a
+    if [[ "$DRY_RUN" == "true" ]]; then
+      echo "[dry-run] az containerapp update --name ${APP_NAME:-<APP_NAME>} --resource-group ${ACA_RESOURCE_GROUP:-<ACA_RESOURCE_GROUP>}"
+    else
+      az containerapp update \
+        --name "${APP_NAME:?set APP_NAME in $ENV_FILE}" \
+        --resource-group "${ACA_RESOURCE_GROUP:?set ACA_RESOURCE_GROUP in $ENV_FILE}"
+    fi
+    ;;
+
+  *)
+    echo "error: unknown environment '$ENV' — use docker, k8s, or aca" >&2
+    exit 1
+    ;;
+esac

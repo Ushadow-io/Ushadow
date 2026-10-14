@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="List shared UI components and Python utilities"
+
+exec uvx --from "git+https://github.com/Ushadow-io/ushadow-sdk" ushadow-components

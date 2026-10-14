@@ -1,12 +1,38 @@
 #!/usr/bin/env bash
 #MISE description="Apply orgs/apps/roles/groups from config/casdoor/*.yaml to running Casdoor"
-#USAGE flag "--env-file <file>" help="Env file to read (default: .env)"
+#USAGE arg "[env]" help="Environment keyword: k8s, aca, or omit for docker (default: docker)"
+#USAGE flag "--env-file <suffix>" help="Env file suffix — overridden by [env] positional (default: .env)"
 #USAGE flag "--config-dir <dir>" help="Directory with Casdoor YAML config (default: ./config/casdoor)"
+#USAGE flag "--compose-file <file>" help="App compose file to restart after provisioning (default: docker-compose.yml)"
+#USAGE flag "--no-restart" help="Skip docker compose down/up after provisioning"
 
 set -euo pipefail
 
-EXTRA=()
-[[ -n "${usage_env_file:-}" ]] && EXTRA+=(--env-file "$usage_env_file")
-[[ -n "${usage_config_dir:-}" ]] && EXTRA+=(--config-dir "$usage_config_dir")
+CONFIG_DIR="${usage_config_dir:-./config/casdoor}"
+COMPOSE_FILE="${usage_compose_file:-docker-compose.yml}"
 
-exec uvx --from "git+https://github.com/Ushadow-io/ushadow-sdk" casdoor-provision ${EXTRA[@]+"${EXTRA[@]}"}
+# Positional env keyword takes precedence over --env-file flag
+ENV_SUFFIX="${usage_env:-${usage_env_file:-.env}}"
+
+# Convert keyword/suffix to full filename: k8s → .env.k8s, .k8s → .env.k8s, .env.k8s → .env.k8s
+if [[ "$ENV_SUFFIX" != .env* ]]; then
+  if [[ "$ENV_SUFFIX" == .* ]]; then
+    ENV_SUFFIX=".env$ENV_SUFFIX"
+  else
+    ENV_SUFFIX=".env.$ENV_SUFFIX"
+  fi
+fi
+
+EXTRA=(--config-dir "$CONFIG_DIR" --env-file "$ENV_SUFFIX")
+
+uvx --from "git+https://github.com/Ushadow-io/ushadow-sdk" casdoor-provision "${EXTRA[@]}"
+
+# Compose restart only applies to docker environments.
+# For k8s/aca the compose file won't exist, so this is a no-op — but guard explicitly.
+ENV_KEYWORD="${usage_env:-docker}"
+if [[ "${usage_no_restart:-false}" != "true" && "$ENV_KEYWORD" != "k8s" && "$ENV_KEYWORD" != "aca" && -f "$COMPOSE_FILE" ]]; then
+  echo ""
+  echo "── Restarting app services to pick up new .env credentials ─────────────"
+  docker compose -f "$COMPOSE_FILE" down
+  docker compose -f "$COMPOSE_FILE" up -d
+fi

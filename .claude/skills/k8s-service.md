@@ -1,424 +1,479 @@
 ---
 name: k8s-service
-description: Deploy a new service or namespace to the chakra Kubernetes cluster. Use when asked to "add a service", "deploy X to k8s", "create a namespace", "wire up network policies", "how do I expose a service", or "how do I deploy code to k8s".
+description: Deploy the current project's service to the shared "chakra" Kubernetes cluster and integrate it with shared infra (postgres, neo4j, redis, qdrant, casdoor). Works from ANY project repo — it operates across two repos plus the live cluster. Use when asked to "add a service", "deploy X to k8s", "move this local service to the cluster", "create a namespace", "wire up network policies", "get DB credentials", "expose a service", or "deploy to k8s".
 ---
 
-## Overview
+## ⚠ Read this before anything else — the access mechanism is NOT fixed
 
-The chakra cluster enforces a **deny-all + explicit-allow** NetworkPolicy model via Calico CNI.
-Every new namespace must be bootstrapped before pods can reach anything (DNS, postgres, casdoor, internet).
+This cluster's NetworkPolicy mechanism has **drifted at the mechanism level** (not just
+renames). Real deploys have observed *all* of these gating styles in use simultaneously
+for different shared services:
 
-Infrastructure services use **label-based access** — label a namespace once to unlock a service for everything inside it.
-App-specific traffic (frontend→backend, backend→external) lives in **policies you co-locate with your manifests**.
+- namespace-label gated (`namespaceSelector: {postgres-access: "true"}`)
+- pod-label gated (`podSelector: {access-mem0: "true"}`)
+- per-consumer-namespace policies (`allow-neo4j-from-chakra-3eye` — admits *only* that ns)
+- **no cross-namespace access at all** (`ingress: []` → must run your own in-ns copy)
 
-**Cluster details:** registry `anubis:32000`, kube context `anubis`, tailnet `spangled-kettle.ts.net`.
+The chakra repo's `deploy/network-policies.yaml` **file is itself drifted from the live
+cluster** — do not trust it, the repo tables here, or any prior assumption. **This skill
+deliberately contains no authoritative service/label/credential tables.** The only
+correct procedure is: read the *live* policy guarding your target service (§2) and
+replicate exactly what it requires. The live cluster always wins.
+
+---
+
+## 0 — Orient: two repos + one cluster
+
+Ships via `ushadow-sdk`, runs in **any** project repo. Do not assume cwd is the chakra
+infra repo. Three places:
+
+| Place | What it is | What lives there | Reach it via |
+|---|---|---|---|
+| **Project repo** (cwd) | the service to deploy | `Dockerfile`, source, optionally its chart/`k8s/` | you're here |
+| **Chakra infra repo** (`$CHAKRA`) | cluster control plane | `deploy/network-policies.yaml`, `deploy/chakra-ingress.yaml`, `deploy/service-registry.yaml`, `.env-prod`, `sync-secrets-k8s.sh`, `Makefile`, `skaffold.yaml` | locate it (below) |
+| **The live cluster** | the running chakra cluster | the **authoritative** Services/Secrets/NetworkPolicies/ConfigMaps | `kubectl` (works anywhere) |
+
+**Rule of thumb:** *discover* against the cluster; *author* cluster-wide changes in
+`$CHAKRA` and commit there; keep your service's image + chart in the project repo.
+
+### Locate the chakra infra repo
+
+```bash
+CHAKRA=$(for d in ~/repos/chakra ~/chakra ../chakra "$(git -C . rev-parse --show-toplevel 2>/dev/null)"; do
+  [ -f "$d/deploy/network-policies.yaml" ] && echo "$d" && break; done)
+echo "${CHAKRA:?chakra infra repo not found — clone it, then re-run}"
+```
+
+If absent: ask for its path or clone it (`~/repos/chakra`). Without it you can still
+discover + `kubectl apply` ad-hoc; cluster-wide changes just won't be version-controlled
+until they land in `$CHAKRA`.
+
+### Preflight — identify the cluster by capability, NOT by context name
+
+```bash
+kubectl config current-context           # informational only — the NAME varies
+# Confirm it IS the chakra cluster by what it contains (names like "anubis",
+# "microk8s", "default" are all normal — microk8s is the node distro):
+kubectl get ns | grep -Eq '(^|\s)root\b' && kubectl get ns | grep -q 'chakra-' \
+  && echo "chakra cluster ✓" || echo "NOT the chakra cluster — ask the user, do NOT switch blindly"
+kubectl get ns >/dev/null                # reachability + RBAC
+```
+
+Never switch away from a working context just because its name isn't "anubis".
+
+**Stable cluster facts:** image registry `anubis:32000` (build `--platform linux/amd64`,
+nodes are amd64), tailnet `spangled-kettle.ts.net`, deny-all NetworkPolicy model (Calico,
+both Ingress *and* Egress). These rarely drift; everything about *which service / which
+label / which secret key* does — discover it.
+
+> Discovery uses `jq` (always present). `yq` is **not** assumed. A `python3` fallback is
+> given for YAML-in-ConfigMap. Each discovery command lists its **expected output shape**
+> so you can tell "the cluster really is like this" from "the command failed".
 
 ---
 
 ## 1 — Bootstrap the namespace
 
+`deny-all` blocks everything (even DNS) until bootstrapped. Helper lives in `$CHAKRA`:
+
 ```bash
-make ns-init NS=myapp
+make -C "$CHAKRA" ns-init NS=myapp
 ```
 
-This applies four policies automatically:
-- `deny-all` — default deny ingress+egress
-- `allow-dns` — egress to kube-dns on port 53
-- `allow-nginx-ingress` — ingress from both `ingress-nginx` **and** `tailscale-system` namespaces
-- `allow-casdoor-egress` — egress to casdoor in the `root` namespace on port 8000
+Structural and stable — this part you can rely on. It: creates ns `myapp`; labels it
+`name=myapp`; applies 4 baseline policies (all `podSelector: {}`):
+- `deny-all` — default deny **ingress + egress**
+- `allow-dns` — egress to `kube-system` TCP/UDP 53
+- `allow-nginx-ingress` — ingress from `ingress-nginx` **and** `tailscale-system`
+- `allow-casdoor-egress` — egress to `root` casdoor:8000
 
-> `tailscale-system` is already covered by the baseline `allow-nginx-ingress` policy — no extra policy needed for Tailscale ingress traffic.
+Do **not** add any shared-service access here, and do **not** assume which label unlocks
+what — that is entirely §2's job, decided from the live cluster. (If `$CHAKRA` is
+unavailable: `kubectl create ns` + `kubectl label ns myapp name=myapp` + recreate the 4
+trivial policies, but prefer locating the repo.)
 
 ---
 
-## 2 — Add app-specific policies alongside your manifests
+## 2 — Connect to a shared service: discover the live gate, then mirror it
 
-Put policy files next to your deployment YAML so `kubectl apply -f k8s/` handles everything.
+There is **no table here on purpose.** Follow the procedure.
 
-### Frontend → Backend
+### Step A — find the policy(ies) actually guarding the target service
 
-```yaml
-# k8s/network-policy-frontend-to-backend.yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-frontend-to-backend
-  namespace: myapp
-spec:
-  podSelector:
-    matchLabels:
-      app: myapp-backend
-  policyTypes: [Ingress]
-  ingress:
-  - from:
-    - podSelector:
-        matchLabels:
-          app: myapp-frontend
-    ports:
-    - protocol: TCP
-      port: 8080   # backend container port
+```bash
+SVC=postgres            # the service you want (postgres|neo4j|redis|qdrant|…)
+# Where does it run + what do its pods look like?
+kubectl get svc -A | grep -i "$SVC"                 # -> ns, ClusterIP, port(s)
+kubectl get pod -A -l app="$SVC" -o wide 2>/dev/null \
+  || kubectl get pod -A | grep -i "$SVC"            # confirm the pod label key/value
+
+# Every NetworkPolicy whose podSelector matches that service, with its ingress rules:
+kubectl get netpol -A -o json | jq -r --arg svc "$SVC" '
+  .items[]
+  | select((.spec.podSelector.matchLabels // {} | tostring | test($svc;"i")))
+  | "── \(.metadata.namespace)/\(.metadata.name)\n   selects: \(.spec.podSelector.matchLabels)\n   ingress: \(.spec.ingress // "NONE (all ingress denied)")"'
 ```
 
-### Backend → Postgres (label-based, no IP needed)
+*Expected output shape* — one or more blocks like:
 
-Covered by `POSTGRES=true` on the namespace — no extra policy file required.
+```
+── root/allow-postgres-from-chakra
+   selects: {"app":"postgres"}
+   ingress: [{"from":[{"namespaceSelector":{"matchLabels":{"postgres-access":"true"}}}],"ports":[{"port":5432}]}]
+```
 
-### Backend → External Internet
+An empty result, or `ingress: NONE`, or rules that name only *other* namespaces, are all
+**valid real states** — not command failures. Interpret per Step B.
+
+### Step B — classify what the live `ingress.from` requires, and do exactly that
+
+| Live rule shape | What it means | Your action |
+|---|---|---|
+| `namespaceSelector: {matchLabels: {K: V}}` | namespace-label gated | `kubectl label ns <yourns> K=V` (commit the label intent in `$CHAKRA` notes) |
+| `podSelector: {matchLabels: {K: V}}` (± `namespaceSelector: {}`) | pod-label gated | add `K: "V"` to your Deployment's `spec.template.metadata.labels` |
+| `from:` lists only *other* namespaces (`allow-<svc>-from-<otherns>`) | per-consumer-namespace gating | **add a sibling provider policy** `allow-<svc>-from-<yourns>` in `$CHAKRA/deploy/network-policies.yaml` cloning the existing one for your ns, then apply |
+| `ingress: []` / `NONE` / nothing can ever admit your ns | not cross-namespace reachable | **do not** wire to it cross-ns — run your own instance *in your namespace* (§3) |
+| `from: [{namespaceSelector: {}, podSelector:{K:V}}]` | label-gated, any ns | label your pod `K: "V"` |
+
+> Existing ≠ "no provider change needed". A long-standing shared service (e.g. neo4j)
+> may still gate per-consumer-namespace, so onboarding a *new* consumer namespace
+> **requires a new `allow-<svc>-from-<yourns>` provider policy**. Discover; don't assume
+> it already admits you.
+
+If you must add a per-namespace provider policy, copy the *existing* sibling verbatim and
+change only the consumer ns, so you match whatever mechanism that service really uses:
+
+```bash
+kubectl get netpol -n <svc-ns> <existing-allow-svc-from-otherns> -o yaml \
+  | yq 'del(.metadata.uid,.metadata.resourceVersion,.metadata.creationTimestamp,.status)' 2>/dev/null \
+  || kubectl get netpol -n <svc-ns> <existing> -o json | jq 'del(.metadata.uid,.metadata.resourceVersion,.metadata.creationTimestamp,.status)'
+# edit the consumer ns, save into $CHAKRA/deploy/network-policies.yaml, then apply (below)
+```
+
+### Step C — you ALWAYS also need the consumer-side egress
+
+`deny-all` blocks *your* egress regardless of the provider's ingress. Add this in
+`$CHAKRA/deploy/network-policies.yaml` under your namespace's `### … NAMESPACE ###`
+section, ports/target taken from Step A's discovery (do not hardcode):
 
 ```yaml
-# k8s/network-policy-backend-egress.yaml
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-backend-egress
+  name: allow-myapp-egress-to-<svc>
   namespace: myapp
 spec:
-  podSelector:
-    matchLabels:
-      app: myapp-backend
+  podSelector: { matchLabels: { app: myapp-backend } }   # the consuming pods
   policyTypes: [Egress]
   egress:
   - to:
-    - ipBlock:
-        cidr: 0.0.0.0/0
-        except:
-        - 10.0.0.0/8
-        - 172.16.0.0/12
-        - 192.168.0.0/16
+    - namespaceSelector:
+        matchLabels: { kubernetes.io/metadata.name: <svc-namespace-from-step-A> }
     ports:
-    - protocol: TCP
-      port: 443
+    - { protocol: TCP, port: <port-from-step-A> }
 ```
+
+Build the connection string from Step A: `<svc>.<svc-namespace>.svc.cluster.local:<port>`
+(verify the exact Service name from the `kubectl get svc` output — neo4j commonly uses
+its **bolt** port for clients, not the HTTP port; confirm which port the policy opens).
+
+### Apply & commit
+
+```bash
+"$CHAKRA"/deploy/apply-network-policies.sh      # labels namespaces + applies whole file
+# or apply only the new docs to avoid unrelated drift:
+kubectl apply -f - <<'EOF'
+<paste just the new/edited policy docs>
+EOF
+```
+Commit the edits in `$CHAKRA` so they survive the next full apply.
+
+### Catalogue (optional, for orientation only — NOT authoritative)
+
+```bash
+kubectl get cm service-registry -n infrastructure -o jsonpath='{.data.registry\.yaml}' 2>/dev/null \
+  | python3 -c 'import sys,yaml;d=yaml.safe_load(sys.stdin) or {};print(yaml.safe_dump(d))' \
+  || echo "(no registry ConfigMap — rely on Step A live discovery)"
+```
+Treat its contents as a stale hint at best; Step A on the live cluster overrides it.
 
 ---
 
-## 3 — Expose the service
+## 3 — App-to-app traffic *within* your namespace (and in-ns dependencies)
 
-### Internal cluster traffic (other pods)
-
-Nothing extra — ClusterIP + the allow policies above are sufficient.
-
-### Via nginx ingress (HTTP/HTTPS, .chakra domain)
+**`deny-all` blocks egress too — including pod-to-pod inside the same namespace.** So
+every intra-namespace hop is *also two-sided* (same principle as §2): an **Ingress** rule
+on the receiver **and** an **Egress** rule on the sender. Shipping only the Ingress half
+(a common mistake) leaves the connection dead — the sender's packets never leave. Both
+docs go in `$CHAKRA/deploy/network-policies.yaml`, your namespace's section:
 
 ```yaml
-# k8s/ingress.yaml
+---
+# Receiver side: backend accepts from frontend
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-myapp-frontend-to-backend
+  namespace: myapp
+spec:
+  podSelector: { matchLabels: { app: myapp-backend } }
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - podSelector: { matchLabels: { app: myapp-frontend } }
+    ports:
+    - { protocol: TCP, port: 8080 }   # backend container port
+---
+# Sender side: frontend may egress to backend — REQUIRED, deny-all blocks this
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-myapp-frontend-egress-to-backend
+  namespace: myapp
+spec:
+  podSelector: { matchLabels: { app: myapp-frontend } }
+  policyTypes: [Egress]
+  egress:
+  - to:
+    - podSelector: { matchLabels: { app: myapp-backend } }
+    ports:
+    - { protocol: TCP, port: 8080 }
+```
+
+**This section is also the answer when §2 Step B says a shared service is not
+cross-namespace reachable** (`ingress: []` or admits only other namespaces): deploy your
+own instance of that dependency (redis, qdrant, …) *inside `myapp`* and wire to it with
+the two-sided pair above (client Egress + dependency Ingress), even though they share a
+namespace.
+
+Public-internet egress: an `Egress` policy with
+`ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16] }`
+on 443.
+
+---
+
+## 4 — Credentials & secrets (discover the keys; never assume names)
+
+```bash
+# Secrets that exist in your namespace:
+kubectl get secret -n <ns> -o name
+# Keys inside one (values stay base64/unread):
+kubectl get secret <name> -n <ns> -o json | jq -r '.data | keys[]'
+# How an existing consumer wires a credential — copy its proven pattern:
+kubectl get deploy -n <ns> -o json \
+  | jq -r '.items[].spec.template.spec.containers[].env[]? | select(.valueFrom.secretKeyRef) | "\(.name) <- \(.valueFrom.secretKeyRef.name):\(.valueFrom.secretKeyRef.key)"'
+```
+
+*Expected output shape:* a list like `NEO4J_PASSWORD <- 3eye-secrets:NEO4J_AUTH`. Use
+**those discovered key names** — the example below is illustrative format only, the real
+keys/secret-names come from the commands above.
+
+**Mechanism:** `$CHAKRA/.env-prod` is split by `# ==== SECRETS ====` / `# ==== CONFIG
+====` markers. `sync-secrets-k8s.sh` turns the SECRETS block into a plain k8s Secret
+(delete-then-recreate). No SealedSecrets/SOPS.
+
+```bash
+sed -n '/^# ==== SECRETS ====/,/^# ==== CONFIG ====/p' "$CHAKRA/.env-prod" \
+  | grep -E '^[A-Z]' | cut -d= -f1            # key names only, never echo values
+"$CHAKRA"/sync-secrets-k8s.sh "$CHAKRA/.env-prod" <secret-name> <namespace>
+make -C "$CHAKRA" <chakra>-sync-secrets       # e.g. root-sync-secrets / 3eye-sync-secrets
+```
+
+Consume (mem0 pattern — `envFrom` bulk + `valueFrom` per key, with *discovered* names):
+
+```yaml
+envFrom:
+  - configMapRef: { name: myapp-config }
+  - secretRef:    { name: <discovered-secret> }
+env:
+  - name: NEO4J_PASSWORD
+    valueFrom:
+      secretKeyRef: { name: <discovered-secret>, key: <discovered-key> }
+```
+
+> New credential → add to SECRETS block of `$CHAKRA/.env-prod`, run the matching
+> `*-sync-secrets`, commit in `$CHAKRA`. App DB/user on postgres: find the live pod
+> (`kubectl get pod -n <pgns> -l app=postgres`), issue each statement as its own exec
+> (`CREATE DATABASE` can't run in a txn), create the user before `CREATE DATABASE … OWNER`.
+
+---
+
+## 5 — Expose the service (hostnames)
+
+### nginx ingress — `*.chakra` (tailnet-internal HTTP)
+
+For standard chakra namespaces, **add a host rule to the existing per-namespace Ingress
+in `$CHAKRA/deploy/chakra-ingress.yaml`** and commit there. A brand-new isolated app
+namespace may instead ship its own Ingress in the project repo:
+
+```yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: myapp
   namespace: myapp
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
+  annotations: { nginx.ingress.kubernetes.io/rewrite-target: / }
 spec:
   ingressClassName: nginx
   rules:
   - host: myapp.chakra
     http:
       paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: myapp-frontend
-            port:
-              number: 80
+      - { path: /, pathType: Prefix, backend: { service: { name: myapp, port: { number: 80 } } } }
 ```
 
-### Via Tailscale — tailnet access (private, recommended default)
+### Tailscale — `<name>.spangled-kettle.ts.net` (private; recommended default)
 
-Accessible only to devices on your Tailscale network. Auto-TLS via Tailscale PKI. Uses the shared `ushadow-proxies` proxy pool (no extra proxy pod per service).
+```bash
+make -C "$CHAKRA" ts-expose SVC=myapp NS=myapp PORT=80
+# -> https://myapp.spangled-kettle.ts.net   (shared ushadow-proxies pool)
+```
+
+Reproducible Ingress alternative:
 
 ```yaml
-# k8s/ingress-ts.yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: myapp-ts
   namespace: myapp
-  annotations:
-    tailscale.com/proxy-group: ushadow-proxies   # shared proxy pool — no extra pod
+  annotations: { tailscale.com/proxy-group: ushadow-proxies }
 spec:
   ingressClassName: tailscale
   rules:
-    - http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: myapp
-                port:
-                  number: 80
-  tls:
-    - hosts:
-        - myapp    # becomes myapp.spangled-kettle.ts.net with auto TLS
+    - http: { paths: [ { path: /, pathType: Prefix, backend: { service: { name: myapp, port: { number: 80 } } } } ] }
+  tls: [ { hosts: [ myapp ] } ]
 ```
 
-### Via Tailscale Funnel — public internet (use intentionally)
-
-> **Warning:** Funnel exposes the service to anyone on the internet with no auth gate. Only use for services that have their own authentication (e.g. OAuth-gated frontends).
-
-```yaml
-# k8s/ingress-ts-funnel.yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: myapp-ts-funnel
-  namespace: myapp
-  annotations:
-    tailscale.com/funnel: "true"                 # PUBLIC — open to internet
-    tailscale.com/proxy-group: ushadow-proxies
-spec:
-  ingressClassName: tailscale
-  rules:
-    - http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: myapp
-                port:
-                  number: 80
-  tls:
-    - hosts:
-        - myapp
-```
-
-> **Tailnet vs Funnel:**
-> - `proxy-group: ushadow-proxies` alone → tailnet-only (private, requires Tailscale membership)
-> - `tailscale.com/funnel: "true"` + proxy-group → public internet, no auth gate
->
-> The cluster default and policy is tailnet-only. Remove the funnel annotation when in doubt.
+Helm-Service alternative: annotate the Service `tailscale.com/expose: "true"`,
+`tailscale.com/hostname: "myapp"`, `tailscale.com/proxy-group: "ushadow-proxies"`.
+**Public internet:** add `tailscale.com/funnel: "true"` — **no auth gate**, only for
+self-authenticating services. Default is tailnet-only.
 
 ---
 
-## 4 — Namespace labels to know
+## 6 — Where manifests live (two patterns — match existing services)
 
-| Label | Effect |
-|---|---|
-| `postgres-access=true` | Postgres NetworkPolicy allows ingress from this namespace |
-| `name=<namespace>` | Used by some policies' namespaceSelector — MicroK8s does not auto-add this |
+Image + chart/manifests belong with the service's source. Discover which layout a
+*similar* existing service uses (`grep -r <similar-svc> "$CHAKRA"/skaffold.yaml`):
 
-Apply via `make ns-init` (handles both) or manually:
+- **In-monorepo** — `chakra-<chakra>/charts/<app>/` (Helm) or `chakra-<chakra>/<app>/k8s/`.
+- **External project repo** (your case here) — chart/manifests stay in *your* repo;
+  `$CHAKRA` references it via a skaffold profile whose `context:` points at the project
+  (often a git submodule under `$CHAKRA`). Match existing external services.
+
+**Cluster-wide assets always live in `$CHAKRA`**, never the project repo:
+`deploy/network-policies.yaml`, `deploy/chakra-ingress.yaml`,
+`deploy/service-registry.yaml`, `.env-prod`, `skaffold.yaml`.
+
+Namespace purposes (orientation only): `chakra-3eye` memory/cognition, `chakra-heart`
+agents, `chakra-crown` MCP/home, `chakra-sacral` LLM/ML, `chakra-throat` audio,
+`chakra-plexus` integration, `root` shared infra.
+
+**kustomization.yaml:** list deployment/service/ingress; **never** include
+`namespace.yaml` (managed by `ns-init`) or PVCs (so `skaffold delete` can't wipe data).
+
+---
+
+## 7 — Build & deploy
+
 ```bash
-kubectl label namespace myapp name=myapp postgres-access=true
+docker buildx build --platform linux/amd64 -t anubis:32000/myapp:latest --push .
 ```
 
----
-
-## 5 — Connecting to shared infrastructure
-
-Cross-namespace DNS pattern: `<service>.<namespace>.svc.cluster.local:<port>`
-
-| Service | Namespace | Port(s) | Connection string |
-|---------|-----------|---------|-------------------|
-| PostgreSQL | root | 5432 | `postgres-postgresql.root.svc.cluster.local:5432` |
-| Redis | root | 6379 | `redis.root.svc.cluster.local:6379` |
-| Neo4j HTTP | root | 7474 | `neo4j-mem0.root.svc.cluster.local:7474` |
-| Neo4j Bolt | root | 7687 | `neo4j-mem0.root.svc.cluster.local:7687` |
-| Qdrant | root | 6333 | `qdrant.root.svc.cluster.local:6333` |
-| Ollama | chakra-sacral | 11434 | `ollama.chakra-sacral.svc.cluster.local:11434` |
-| MongoDB | ushadow | 27017 | `mongo.ushadow.svc.cluster.local:27017` (ushadow ns only) |
-| Casdoor (auth) | root | 8000 | `casdoor.root.svc.cluster.local:8000` |
-
-**Access is granted via pod labels — add these to your pod template's `labels:` block:**
+Orchestrated by `$CHAKRA/skaffold.yaml` (one profile per service). For an external
+project point `context:` at the project path/submodule:
 
 ```yaml
-# Grant only the access each pod actually needs:
-access-postgres: "true"   # postgres-postgresql.root:5432
-access-redis: "true"      # redis.root:6379
-access-neo4j: "true"      # neo4j-mem0.root:7687 (bolt)
-access-qdrant: "true"     # qdrant.root:6333
-access-ollama: "true"     # ollama.chakra-sacral:11434
-```
-
-Central ingress policies on each service select `namespaceSelector: {}` + the pod label — so only labelled pods can connect, regardless of which namespace they live in. A compromised frontend pod with no access labels cannot reach any database even if it's on the same node.
-
-**MongoDB** — deployed in `ushadow` namespace only; not a shared cluster service.
-
-**You also need an egress policy** in your namespace for each service you connect to (deny-all blocks outbound too). Template:
-```yaml
-# k8s/netpol-egress-postgres.yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-backend-to-postgres
-  namespace: myapp
-spec:
-  podSelector:
-    matchLabels:
-      app: myapp-backend
-  policyTypes: [Egress]
-  egress:
-  - to:
-    - namespaceSelector:
-        matchLabels:
-          name: root
-      podSelector:
-        matchLabels:
-          app: postgres
-    ports:
-    - protocol: TCP
-      port: 5432
-```
-
----
-
-## 6 — Deploy your app
-
-**Cluster registry:** `anubis:32000`  **Kube context:** `anubis`
-
-### A. Skaffold (recommended — for apps you build and deploy)
-
-Chakra uses a single root `skaffold.yaml` with one profile per service. Add a profile block:
-
-```yaml
-# Append to /repos/chakra/skaffold.yaml under profiles:
-
-  # Helm chart deploy (most services)
   - name: myapp
     build:
-      local:
-        push: true
-        useDockerCLI: true
+      local: { push: true, useDockerCLI: true }
       artifacts:
         - image: anubis:32000/myapp
-          context: chakra-myns/myapp
-          docker:
-            dockerfile: Dockerfile
+          context: <path-to-project-or-submodule>
+          docker: { dockerfile: Dockerfile }
     deploy:
-      kubeContext: anubis
-      helm:
+      kubeContext: <current-context-name>      # NOT hardcoded "anubis" — use the live one
+      helm:                                    # or: kubectl: {} + manifests.kustomize
         releases:
           - name: myapp
-            chartPath: chakra-myns/charts/myapp
+            chartPath: <chart path>
             namespace: myns
-            valuesFiles:
-              - chakra-myns/charts/myapp/values.yaml
+            valuesFiles: [ <values.yaml> ]
             setValueTemplates:
               image.repository: "{{.IMAGE_REPO_anubis_32000_myapp}}"
               image.tag: "{{.IMAGE_TAG_anubis_32000_myapp}}"
-
-  # Plain manifests deploy (kubectl apply via kustomize)
-  - name: myapp-plain
-    build:
-      local:
-        push: true
-        useDockerCLI: true
-      artifacts:
-        - image: anubis:32000/myapp
-          context: chakra-myns/myapp
-          docker:
-            dockerfile: Dockerfile
-    manifests:
-      kustomize:
-        paths:
-          - chakra-myns/myapp/k8s
-    deploy:
-      kubeContext: anubis
-      kubectl: {}
 ```
-
-**kustomization.yaml rules:**
-```yaml
-# chakra-myns/myapp/k8s/kustomization.yaml
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-namespace: myns
-resources:
-  - deployment.yaml
-  - service.yaml
-  - ingress.yaml
-  # DO NOT include namespace.yaml — managed by make ns-init
-  # DO NOT include PVCs — manage them separately so skaffold delete never wipes persistent data
-```
-
-**Commands:**
-```bash
-skaffold run -p myapp           # build → push to anubis:32000 → deploy
-skaffold run -p myapp --tail    # same, then stream logs
-skaffold dev  -p myapp          # build → deploy → watch source → hot-reload + port-forward
-skaffold delete -p myapp        # remove from cluster
-```
-
-### B. Plain kubectl (static manifests, no build step)
 
 ```bash
-kubectl apply -f k8s/
-kubectl delete -f k8s/ --ignore-not-found
-kubectl rollout restart deploy/myapp -n myns   # after a manual image push
+( cd "$CHAKRA" && skaffold run -p myapp )       # build -> push -> deploy
+( cd "$CHAKRA" && skaffold dev -p myapp )       # + watch/hot-reload
+( cd "$CHAKRA" && mise run deploy:k8s-run myapp )   # mise wrappers: k8s-dev/-delete/-logs/-status
 ```
 
-### C. Helm only (chart with no custom image)
-
-```bash
-helm upgrade --install myapp ./charts/myapp -n myns -f values.yaml
-helm uninstall myapp -n myns
-```
+Without a profile: `docker push` then `helm upgrade --install` / `kubectl apply` /
+`kubectl rollout restart deploy/myapp -n myns`.
 
 ---
 
-## 7 — Checklist for a new service
+## 8 — End-to-end (a local service → cluster, integrating a DB + a domain)
 
-- [ ] `make ns-init NS=myapp`
-- [ ] Deployment + Service YAML in `k8s/` or Helm chart
-- [ ] App-specific NetworkPolicy files (frontend↔backend, external egress, shared service egress)
-- [ ] Ingress YAML — nginx (`myapp.chakra`) and/or Tailscale (`proxy-group: ushadow-proxies` + `tls` block)
-- [ ] Add skaffold profile to root `skaffold.yaml`
-- [ ] `skaffold run -p myapp` or `kubectl apply -f k8s/`
+0. **Orient (§0):** export `$CHAKRA`; confirm the cluster *by capability* (chakra ns exist).
+1. **Discover (§2 Step A/B + §4):** for each dependency, read the live policy guarding it
+   and classify the gate; resolve FQDN/port and secret keys. Use those, not literals.
+2. **Build & push:** `docker buildx build --platform linux/amd64 -t anubis:32000/myapp:latest --push .`
+3. **Namespace:** `make -C "$CHAKRA" ns-init NS=<ns>` (idempotent).
+4. **Satisfy each gate (§2 Step B):** namespace label *or* pod label *or* a new
+   `allow-<svc>-from-<ns>` provider policy *or* (if unreachable) an in-ns instance (§3).
+5. **Consumer egress (§2 Step C):** add `allow-myapp-egress-to-<svc>`; apply; commit in `$CHAKRA`.
+6. **Credentials (§4):** ensure keys in `.env-prod` SECRETS; `make -C "$CHAKRA" <chakra>-sync-secrets`;
+   wire via discovered key names; create app DB/user on the live postgres pod.
+7. **Connect** using the FQDN/port from Step A (graph DB via its bolt port).
+8. **Domain (§5):** host rule in `$CHAKRA/deploy/chakra-ingress.yaml` and/or `ts-expose`.
+9. **Deploy (§7):** skaffold profile in `$CHAKRA/skaffold.yaml`; `skaffold run -p myapp`; verify (§9).
 
 ---
 
-## 8 — Operational commands
+## 9 — Verify & debug
 
 ```bash
-# Tail logs
+kubectl rollout status deploy/myapp -n myapp
+kubectl describe pod -n myapp -l app=myapp           # OOMKill / probe / ImagePull
 kubectl logs -n myapp deploy/myapp -f --tail=100
+kubectl exec -n myapp deploy/myapp -- nslookup <db-fqdn>     # DNS (proves allow-dns)
 
-# Open a shell in a running pod
-kubectl exec -n myapp -it deploy/myapp -- sh
+# Reachability — NetworkPolicy drops are silent TCP connect HANGS / 504, never 4xx:
+kubectl run nettest -n myapp --rm -it --image=curlimages/curl:latest --restart=Never \
+  -- curl -sv --max-time 5 telnet://<db-fqdn>:<port>
 
-# Port-forward a service to localhost
-kubectl port-forward -n myapp svc/myapp 8080:80
-
-# Check pod events (OOMKill, probe failures, image pull errors)
-kubectl describe pod -n myapp -l app=myapp
-
-# List all ingresses and their assigned hostnames
+kubectl get netpol -n myapp
 kubectl get ingress -A
-
-# Check whether a Tailscale ingress got a hostname
 kubectl get ingress -n myapp myapp-ts -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
-
-# mise shortcuts (run from chakra root)
-mise run deploy:k8s-run myapp            # skaffold run -p myapp
-mise run deploy:k8s-dev myapp            # skaffold dev -p myapp
-mise run deploy:k8s-delete myapp         # skaffold delete -p myapp
-mise run deploy:k8s-logs myns myapp      # kubectl logs -n myns deploy/myapp -f
-mise run deploy:k8s-status myns          # kubectl get pods,ingress -n myns
-
-# Port-forward to shared services
-kubectl port-forward -n root          svc/postgres-postgresql 5432:5432
-kubectl port-forward -n root          svc/redis               6379:6379
-kubectl port-forward -n root          svc/neo4j-mem0          7474:7474
-kubectl port-forward -n chakra-sacral svc/ollama              11434:11434
 ```
+
+**Most common failure — a pod can't reach a dependency, silently.** In order:
+(1) re-run §2 Step A against the live cluster — did the gate change?  (2) did you satisfy
+the *actual* gate from Step B (right ns label / pod label / a `from-<yourns>` provider
+policy / or it's simply not cross-ns reachable → §3)?  (3) is the consumer-side **egress**
+(§2 Step C) present *and applied*?  (4) right port (graph DB bolt, not HTTP)?  (5) Service
+FQDN current (`kubectl get svc -A`)?
 
 ---
 
-## 9 — Debugging policy issues
+## 10 — Checklist
 
-```bash
-# Is the pod reaching DNS?
-kubectl exec -n myapp deploy/myapp -- nslookup kubernetes.default
+**Project repo**
+- [ ] Image `--platform linux/amd64`, pushed to `anubis:32000`
+- [ ] Chart/manifests carry whatever §2 Step B discovery actually required + discovered secret refs
 
-# Does a specific connection work?
-kubectl exec -n myapp deploy/myapp-backend -- curl -sv http://postgres-postgresql.root.svc.cluster.local:5432
+**`$CHAKRA` (commit there)**
+- [ ] `make -C "$CHAKRA" ns-init NS=<ns>` if new
+- [ ] Per-dependency: the discovered gate satisfied (ns label / pod label / new `allow-<svc>-from-<ns>` / in-ns fallback)
+- [ ] Consumer-side egress policy (§2 Step C) added + applied
+- [ ] Secrets in `.env-prod` + `make -C "$CHAKRA" <chakra>-sync-secrets`
+- [ ] Hostname in `deploy/chakra-ingress.yaml` and/or `ts-expose`
+- [ ] Skaffold profile (`context:` → project/submodule; `kubeContext:` = live context name)
 
-# Show all policies in a namespace
-kubectl get networkpolicy -n myapp
-
-# Calico policy evaluation order
-# Note: Calico sees pod IPs after kube-proxy DNAT — use pod CIDRs (10.1.x.x), not ClusterIPs, in ipBlock rules
-```
+**Then**
+- [ ] `( cd "$CHAKRA" && skaffold run -p <app> )`, verified per §9 against the live cluster

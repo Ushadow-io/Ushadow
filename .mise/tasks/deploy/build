@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+#MISE description="Build, push, and deploy Docker image"
+#USAGE arg "[env]" help="Target environment: k8s, aca, or omit for docker (default: docker)"
+#USAGE flag "--tag <tag>" help="Image tag (default: short git SHA)"
+#USAGE flag "--dry-run" help="Print commands without executing"
+
+set -euo pipefail
+
+ENV="${usage_env:-docker}"
+DRY_RUN="${usage_dry_run:-false}"
+
+case "$ENV" in
+  ""|docker|local) ENV_FILE=".env" ;;
+  *) ENV_FILE=".env.$ENV" ;;
+esac
+
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "error: $ENV_FILE not found" >&2
+  exit 1
+fi
+
+set -a; source "$ENV_FILE"; set +a
+
+TAG="${usage_tag:-$(git rev-parse --short HEAD 2>/dev/null || echo latest)}"
+REGISTRY="${IMAGE_REGISTRY:-anubis:32000}"
+NAME="${IMAGE_NAME:-${APP_NAME:-app}}"
+
+IMAGE="${REGISTRY}/${NAME}:${TAG}"
+
+echo "── Build & push ───────────────────────────────────────────────────────────"
+echo "  image: $IMAGE"
+
+if [[ "$DRY_RUN" == "true" ]]; then
+  echo "[dry-run] docker build -t $IMAGE ."
+  echo "[dry-run] docker push $IMAGE"
+else
+  docker build -t "$IMAGE" .
+  docker push "$IMAGE"
+fi
+
+echo ""
+echo "── Deploy ─────────────────────────────────────────────────────────────────"
+
+case "$ENV" in
+  ""|docker|local)
+    if [[ "$DRY_RUN" == "true" ]]; then
+      echo "[dry-run] docker compose --env-file $ENV_FILE up -d"
+    else
+      docker compose --env-file "$ENV_FILE" up -d
+    fi
+    ;;
+
+  k8s)
+    if [[ ! -d k8s ]] || ! ls k8s/*.yaml &>/dev/null; then
+      echo "error: no YAML files found in k8s/" >&2
+      exit 1
+    fi
+    # Export vars so envsubst can substitute ${IMAGE}, ${IMAGE_TAG}, ${IMAGE_REGISTRY},
+    # ${APP_NAME} anywhere they appear in manifests.
+    export IMAGE IMAGE_TAG="$TAG" IMAGE_REGISTRY="$REGISTRY" APP_NAME="$NAME"
+    if [[ "$DRY_RUN" == "true" ]]; then
+      echo "[dry-run] envsubst < k8s/*.yaml | kubectl apply -f -"
+    else
+      cat k8s/*.yaml | envsubst | kubectl apply -f -
+    fi
+    ;;
+
+  aca)
+    if [[ "$DRY_RUN" == "true" ]]; then
+      echo "[dry-run] az containerapp update --name ${APP_NAME:-<APP_NAME>} --resource-group ${ACA_RESOURCE_GROUP:-<ACA_RESOURCE_GROUP>} --image $IMAGE"
+    else
+      az containerapp update \
+        --name "${APP_NAME:?set APP_NAME in $ENV_FILE}" \
+        --resource-group "${ACA_RESOURCE_GROUP:?set ACA_RESOURCE_GROUP in $ENV_FILE}" \
+        --image "$IMAGE"
+    fi
+    ;;
+
+  *)
+    echo "error: unknown environment '$ENV' — use docker, k8s, or aca" >&2
+    exit 1
+    ;;
+esac
+
+echo "✓ Deploy complete ($IMAGE)"

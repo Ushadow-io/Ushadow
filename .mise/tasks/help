@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#MISE description="List available tasks grouped by namespace"
+
+mise tasks --json 2>/dev/null | python3 -c "
+import json, sys
+
+tasks = json.load(sys.stdin)
+groups: dict = {}
+for t in sorted(tasks, key=lambda x: x['name']):
+    name = t['name']
+    parts = name.split(':', 1)
+    group = parts[0] if len(parts) > 1 else ''
+    subname = parts[1] if len(parts) > 1 else name
+    groups.setdefault(group, []).append((subname, t.get('description', '')))
+
+ungrouped = groups.pop('', [])
+
+def section(label, items):
+    bar = '─' * max(1, 60 - len(label))
+    print(f'── {label} {bar}')
+    mw = max(len(n) for n, _ in items)
+    for n, d in items:
+        print(f'  {n:{mw}}   {d}')
+    print()
+
+if ungrouped:
+    section('general', ungrouped)
+for g in sorted(groups):
+    section(g, groups[g])
+"
