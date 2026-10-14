@@ -13,7 +13,8 @@ import { getActiveUnode } from '../_utils/unodeStorage';
 export interface Memory {
   id: string;
   memory: string;
-  created_at: string;
+  // Unix timestamp in seconds from mem0 (number), or ISO string from other sources.
+  created_at: string | number;
   categories: string[];
   app_name: string;
   state: 'active' | 'paused' | 'archived' | 'processing';
@@ -22,7 +23,7 @@ export interface Memory {
 interface ApiMemoryItem {
   id: string;
   content: string;
-  created_at: string;
+  created_at: string | number;
   state: string;
   app_id: string;
   categories: string[];
@@ -129,6 +130,57 @@ async function makeMemoryRequest<T>(
     throw new Error(`API request failed: ${response.status}`);
   }
 
+  return response.json();
+}
+
+/**
+ * Get the ushadow backend base URL (parallel to mem0 proxy URL above).
+ * Used for endpoints that live on the backend itself, not the mem0 proxy.
+ */
+async function getBackendBaseUrl(): Promise<string> {
+  const activeUnode = await getActiveUnode();
+  if (activeUnode?.apiUrl) return activeUnode.apiUrl;
+  const storedUrl = await getApiUrl();
+  if (storedUrl) return storedUrl;
+  return 'https://red.spangled-kettle.ts.net';
+}
+
+export interface ConversationMemory {
+  id: string;
+  content: string;
+  source: string;
+  created_at?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ConversationMemoriesResponse {
+  conversation_id: string;
+  conversation_source: 'chronicle' | 'mycelia';
+  memories: ConversationMemory[];
+  count: number;
+  sources_queried: string[];
+}
+
+/**
+ * Fetch memories linked to a specific conversation across all memory sources
+ * (matches web's unifiedMemoriesApi.getConversationMemories).
+ *
+ * Endpoint lives on the ushadow backend, not the mem0 proxy.
+ */
+export async function getConversationMemories(
+  conversationId: string,
+  source: 'chronicle' | 'mycelia'
+): Promise<ConversationMemoriesResponse> {
+  const [baseUrl, token] = await Promise.all([getBackendBaseUrl(), getToken()]);
+  if (!token) throw new Error('Not authenticated. Please log in first.');
+
+  const url = `${baseUrl}/api/memories/by-conversation/${conversationId}?conversation_source=${source}`;
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch conversation memories: ${response.status}`);
+  }
   return response.json();
 }
 

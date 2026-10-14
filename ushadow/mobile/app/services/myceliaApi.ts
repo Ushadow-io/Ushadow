@@ -166,15 +166,41 @@ export async function fetchConversations(
 
 /**
  * Fetch a single conversation by ID from Mycelia.
+ * Unwrap an optional `{ conversation: ... }` envelope to mirror Chronicle.
  */
 export async function fetchConversation(conversationId: string): Promise<Conversation> {
   try {
-    const response = await apiRequest<any>(`/data/conversations/${conversationId}`);
-    return normalizeConversation(response);
+    const raw = await apiRequest<any>(`/data/conversations/${conversationId}`);
+    const inner =
+      raw && typeof raw === 'object' && 'conversation' in raw && raw.conversation
+        ? raw.conversation
+        : raw;
+    return normalizeConversation(inner);
   } catch (error) {
     console.error('[MyceliaAPI] Failed to fetch conversation:', error);
     throw error;
   }
+}
+
+/**
+ * Build a Mycelia audio stream URL for the conversation's time range.
+ * Token is passed as a query parameter; the ushadow proxy promotes it to
+ * an Authorization header for `audio`/`media` paths (services.py:611-627).
+ *
+ * Conversation must expose `timeRanges[0].start` and `timeRanges[0].end`.
+ */
+export async function getMyceliaAudioUrl(conv: any): Promise<string> {
+  const [apiUrl, token] = await Promise.all([getBackendApiUrl(), getToken()]);
+  if (!token) {
+    throw new Error('Not authenticated. Please log in first.');
+  }
+  const range = conv?.timeRanges?.[0];
+  if (!range?.start || !range?.end) {
+    throw new Error('Mycelia conversation has no timeRanges');
+  }
+  const startUnix = Math.floor(new Date(range.start).getTime() / 1000);
+  const endUnix = Math.ceil(new Date(range.end).getTime() / 1000);
+  return `${apiUrl}/api/services/${MYCELIA_SERVICE}/proxy/api/audio/stream?start=${startUnix}&end=${endUnix}&token=${encodeURIComponent(token)}`;
 }
 
 /**

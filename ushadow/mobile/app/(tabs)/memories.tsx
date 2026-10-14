@@ -108,9 +108,15 @@ export default function MemoriesScreen() {
     loadMemories();
   }, [loadMemories]);
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString(undefined, {
+  // mem0 returns created_at as a Unix timestamp in SECONDS (e.g. 1777286616),
+  // not an ISO string. new Date(seconds) misreads it as ms → Jan 1970.
+  // Mirror the web MemoryCard: ISO strings parse directly, numeric values ×1000.
+  const formatDate = (value: string | number | null | undefined) => {
+    if (value === null || value === undefined || value === '') return 'Unknown';
+    const str = String(value);
+    const ms = str.includes('T') ? new Date(str).getTime() : parseInt(str, 10) * 1000;
+    if (isNaN(ms)) return 'Unknown';
+    return new Date(ms).toLocaleDateString(undefined, {
       month: 'short',
       day: 'numeric',
       year: 'numeric',

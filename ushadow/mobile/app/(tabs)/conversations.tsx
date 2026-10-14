@@ -19,11 +19,11 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { theme, colors, spacing, borderRadius, fontSize } from '../theme';
-import { Conversation, getChronicleAudioUrl } from '../services/chronicleApi';
+import { Conversation } from '../services/chronicleApi';
 import { isAuthenticated } from '../_utils/authStorage';
-import ConversationAudioPlayer from '../components/AudioPlayer';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import {
   useChronicleConversations,
@@ -35,9 +35,8 @@ import {
 type ConversationWithSource = Conversation & { source?: ConversationSource };
 
 export default function ConversationsScreen() {
+  const router = useRouter();
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [expandedDetailedSummary, setExpandedDetailedSummary] = useState<Set<string>>(new Set());
 
   // Check if dual-source mode is enabled
   const isDualSourceEnabled = useFeatureFlag('mobile_dual_source_conversations');
@@ -89,21 +88,13 @@ export default function ConversationsScreen() {
     activeData.refetch();
   }, [activeData.refetch]);
 
-  const toggleExpand = (id: string) => {
-    setExpandedId(expandedId === id ? null : id);
-  };
-
-  const toggleDetailedSummary = (id: string) => {
-    setExpandedDetailedSummary(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(id)) {
-        newSet.delete(id);
-      } else {
-        newSet.add(id);
-      }
-      return newSet;
-    });
-  };
+  const openConversation = useCallback(
+    (id: string, conversationSource?: ConversationSource) => {
+      const src = conversationSource || 'chronicle';
+      router.push(`/conversation/${id}?source=${src}`);
+    },
+    [router]
+  );
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return 'Unknown date';
@@ -116,39 +107,11 @@ export default function ConversationsScreen() {
     });
   };
 
-  const formatDuration = (seconds?: number) => {
-    if (!seconds) return 'Unknown';
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.round(seconds % 60);
-    return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'active':
-        return colors.success.default;
-      case 'processing':
-        return colors.warning.default;
-      case 'closed':
-        return theme.textMuted;
-      default:
-        return theme.textMuted;
-    }
-  };
-
   const renderConversation = ({ item }: { item: ConversationWithSource }) => {
     const itemId = item.id || item.conversation_id;
-    const isExpanded = expandedId === itemId;
-    const isDetailedExpanded = expandedDetailedSummary.has(itemId);
-
-    // Use title as main heading, summary as preview
     const title = item.title || 'Untitled Conversation';
     const summary = item.summary || 'No summary available';
-
-    // Determine status from has_memory or default
     const hasContent = item.has_memory || (item.memory_count && item.memory_count > 0);
-
-    // Get source badge info
     const sourceBadge = item.source
       ? {
           label: item.source === 'chronicle' ? 'Chronicle' : 'Mycelia',
@@ -159,7 +122,7 @@ export default function ConversationsScreen() {
     return (
       <TouchableOpacity
         style={styles.conversationCard}
-        onPress={() => toggleExpand(itemId)}
+        onPress={() => openConversation(itemId, item.source)}
         activeOpacity={0.7}
         testID={`conversation-${itemId}`}
       >
@@ -177,90 +140,17 @@ export default function ConversationsScreen() {
             {item.segment_count !== undefined && (
               <Text style={styles.duration}>{item.segment_count} segments</Text>
             )}
-            <Ionicons
-              name={isExpanded ? 'chevron-up' : 'chevron-down'}
-              size={20}
-              color={theme.textMuted}
-            />
+            <Ionicons name="chevron-forward" size={20} color={theme.textMuted} />
           </View>
         </View>
 
-        {/* Title */}
-        <Text style={styles.conversationTitle} numberOfLines={isExpanded ? undefined : 1}>
+        <Text style={styles.conversationTitle} numberOfLines={1}>
           {title}
         </Text>
 
-        {/* Summary - always visible, more lines when collapsed */}
-        <Text
-          style={styles.transcriptPreview}
-          numberOfLines={isExpanded ? undefined : 4}
-        >
+        <Text style={styles.transcriptPreview} numberOfLines={3}>
           {summary}
         </Text>
-
-        {isExpanded && (
-          <View style={styles.expandedContent}>
-            {/* Audio Player */}
-            {(item.audio_path || item.cropped_audio_path) && item.conversation_id && (
-              <ConversationAudioPlayer
-                conversationId={item.conversation_id}
-                cropped={true}
-                getAudioUrl={getChronicleAudioUrl}
-              />
-            )}
-
-            {/* Detailed summary with its own toggle */}
-            {item.detailed_summary && (
-              <View style={styles.detailedSummarySection}>
-                <TouchableOpacity
-                  onPress={(e) => {
-                    e.stopPropagation();
-                    toggleDetailedSummary(itemId);
-                  }}
-                  style={styles.sectionHeader}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.sectionLabel}>Detailed Summary</Text>
-                  <Ionicons
-                    name={isDetailedExpanded ? 'chevron-up' : 'chevron-down'}
-                    size={16}
-                    color={theme.textMuted}
-                  />
-                </TouchableOpacity>
-                {isDetailedExpanded && (
-                  <Text style={styles.fullTranscript}>
-                    {item.detailed_summary}
-                  </Text>
-                )}
-              </View>
-            )}
-
-            <View style={styles.metadataSection}>
-              <View style={styles.metadataRow}>
-                <Text style={styles.metadataLabel}>Client:</Text>
-                <Text style={styles.metadataValue}>{item.client_id}</Text>
-              </View>
-              {item.segment_count !== undefined && (
-                <View style={styles.metadataRow}>
-                  <Text style={styles.metadataLabel}>Segments:</Text>
-                  <Text style={styles.metadataValue}>{item.segment_count}</Text>
-                </View>
-              )}
-              {item.memory_count !== undefined && (
-                <View style={styles.metadataRow}>
-                  <Text style={styles.metadataLabel}>Memories:</Text>
-                  <Text style={styles.metadataValue}>{item.memory_count}</Text>
-                </View>
-              )}
-              {item.transcript_version_count !== undefined && (
-                <View style={styles.metadataRow}>
-                  <Text style={styles.metadataLabel}>Transcript Versions:</Text>
-                  <Text style={styles.metadataValue}>{item.transcript_version_count}</Text>
-                </View>
-              )}
-            </View>
-          </View>
-        )}
       </TouchableOpacity>
     );
   };

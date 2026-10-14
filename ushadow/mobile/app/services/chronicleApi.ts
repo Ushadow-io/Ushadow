@@ -105,7 +105,7 @@ async function getChronicleApiUrl(): Promise<string> {
   const defaultUrl = await getDefaultServerUrl();
   console.log(`[ChronicleAPI] Using default Chronicle generic proxy: ${defaultUrl}`);
   return `${defaultUrl}/api/services/chronicle-backend/proxy`;
-e}
+}
 
 /**
  * Get the auth token from active UNode or global storage.
@@ -196,10 +196,18 @@ export async function fetchConversations(
 
 /**
  * Fetch a single conversation by ID.
+ *
+ * Chronicle's GET /api/conversations/{id} sometimes returns the conversation
+ * wrapped as `{ conversation: {...} }`; the web client unwraps this shape and
+ * mobile must do the same or the detail screen receives a hollow object.
  */
 export async function fetchConversation(conversationId: string): Promise<Conversation> {
   try {
-    return await apiRequest<Conversation>(`/api/conversations/${conversationId}`);
+    const raw = await apiRequest<any>(`/api/conversations/${conversationId}`);
+    if (raw && typeof raw === 'object' && 'conversation' in raw && raw.conversation) {
+      return raw.conversation as Conversation;
+    }
+    return raw as Conversation;
   } catch (error) {
     console.error('[ChronicleAPI] Failed to fetch conversation:', error);
     throw error;
