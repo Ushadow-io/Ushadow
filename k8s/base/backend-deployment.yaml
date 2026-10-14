@@ -37,9 +37,32 @@ spec:
               value: redis://redis:6379/0
           image: registry.temp.skaffold/ushadow-backend
           name: ushadow-backend
+          # Same as the Dockerfile CMD minus --reload. Under --reload the
+          # supervisor outlives a crashed worker, so the container stays
+          # "Running" while nothing listens on 8000 (seen after a mongo restart).
+          command:
+            - sh
+            - -c
+            - uv run --no-sync uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'
           ports:
             - containerPort: 8000
               protocol: TCP
+          # /health always returns 200 while the process serves requests
+          # (dependency status is in the body), so it is a pure liveness signal.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 20
+            timeoutSeconds: 10
+            failureThreshold: 3
           volumeMounts:
             - name: config-volume
               mountPath: /config
