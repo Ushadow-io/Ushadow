@@ -529,21 +529,36 @@ async def _query_openmemory_by_source_id(
 
     logger.info(f"[MEMORIES] _query_openmemory: url={openmemory_url}, source_id={source_id}, user={user_email}")
 
+    # Page through the SAME /filter endpoint the main Memories list uses, so a
+    # conversation's memories are found regardless of total count. The old code
+    # did GET /api/v1/memories/?limit=100 then filtered client-side, which both
+    # capped results at 100 and diverged from the working list path.
+    page_size = 100
+    max_pages = 50  # Safety bound: at most 5000 memories scanned per conversation
+
     async with httpx.AsyncClient() as client:
-        # Query all memories for user
-        query_url = f"{openmemory_url}/api/v1/memories/"
-        params = {"user_id": user_email, "limit": 100, "output_format": "v1.1"}
-        logger.info(f"[MEMORIES] Querying: {query_url} with params: {params}")
+        filter_url = f"{openmemory_url}/api/v1/memories/filter"
+        page = 1
+        total_pages = 1
 
-        response = await client.get(query_url, params=params)
-        logger.info(f"[MEMORIES] OpenMemory response status: {response.status_code}")
-        response.raise_for_status()
-        data = response.json()
-        logger.info(f"[MEMORIES] OpenMemory returned {len(data.get('items', []))} total memories")
+        while page <= total_pages and page <= max_pages:
+            payload = {
+                "user_id": user_email,
+                "page": page,
+                "size": page_size,
+                "output_format": "v1.1",
+            }
+            response = await client.post(filter_url, json=payload)
+            if page == 1:
+                logger.info(f"[MEMORIES] OpenMemory filter status: {response.status_code}")
+            response.raise_for_status()
+            data = response.json()
+            total_pages = data.get("pages", 1) or 1
+            items = data.get("items", [])
+            if not items:
+                break
 
-        # Filter by source_id in metadata
-        if "items" in data:
-            for item in data["items"]:
+            for item in items:
                 metadata = item.get("metadata_", {})
 
                 # Check if this memory belongs to the conversation
@@ -565,6 +580,9 @@ async def _query_openmemory_by_source_id(
                             score=None
                         ))
 
+            page += 1
+
+    logger.info(f"[MEMORIES] OpenMemory matched {len(memories)} memories for source_id={source_id}")
     return memories
 
 
