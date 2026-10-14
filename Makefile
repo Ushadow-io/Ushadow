@@ -191,7 +191,7 @@ chronicle-env-export:
 # Build Chronicle from local source
 chronicle-build-local:
 	@echo "🔨 Building Chronicle from local source..."
-	@docker build -t chronicle-backend-local:latest chronicle/backends/advanced
+	@docker build -t chronicle-backend-local:latest chronicle/backend
 	@docker tag chronicle-backend-local:latest ghcr.io/ushadow-io/chronicle-backend:local
 	@echo "✅ Built and tagged as ghcr.io/ushadow-io/chronicle-backend:local"
 
@@ -267,7 +267,7 @@ chronicle-push-local:
 		exit 1; \
 	fi
 	@echo "🏗️  Building chronicle-backend for $(K8S_REGISTRY) (amd64)..."
-	@docker build --platform linux/amd64 -t $(K8S_REGISTRY)/chronicle-backend:latest -f chronicle/backends/advanced/Dockerfile chronicle/backends/advanced
+	@docker build --platform linux/amd64 -t $(K8S_REGISTRY)/chronicle-backend:latest -f chronicle/backend/Dockerfile chronicle/backend
 	@echo "📤 Pushing to $(K8S_REGISTRY)..."
 	@docker push $(K8S_REGISTRY)/chronicle-backend:latest
 	@echo "✅ Pushed $(K8S_REGISTRY)/chronicle-backend:latest"

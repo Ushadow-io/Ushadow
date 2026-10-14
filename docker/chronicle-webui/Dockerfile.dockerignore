@@ -1,0 +1,6 @@
+# Context is the whole chronicle repo; send only what the webui build needs.
+*
+!contracts/audio/v2/typescript
+!backend/webui
+**/node_modules
+**/dist

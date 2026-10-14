@@ -64,7 +64,7 @@ services:
   chronicle-backend:
     image: ghcr.io/ushadow-io/chronicle-backend:latest
     build:
-      context: ../chronicle/backends/advanced
+      context: ../chronicle/backend
       dockerfile: Dockerfile
       target: dev
     pull_policy: build  # Build from source if context exists, otherwise pull from GHCR
@@ -143,7 +143,7 @@ services:
   chronicle-workers:
     image: ghcr.io/ushadow-io/chronicle-backend:latest
     build:
-      context: ../chronicle/backends/advanced
+      context: ../chronicle/backend
       dockerfile: Dockerfile
       target: prod
     pull_policy: build  # Build from source if context exists, otherwise pull from GHCR
@@ -202,8 +202,8 @@ services:
   chronicle-webui:
     image: ghcr.io/ushadow-io/chronicle/webui:latest
     build:
-      context: ../chronicle/backends/advanced/webui
-      dockerfile: Dockerfile
+      context: ../chronicle
+      dockerfile: ../docker/chronicle-webui/Dockerfile
     pull_policy: build  # Build from source if context exists, otherwise pull from GHCR
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-chronicle-webui
     ports:

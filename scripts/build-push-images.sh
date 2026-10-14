@@ -91,27 +91,28 @@ case "$SERVICE" in
 
         # Build backend
         build_and_push \
-            "chronicle/backends/advanced" \
-            "chronicle/backends/advanced/Dockerfile" \
+            "chronicle/backend" \
+            "chronicle/backend/Dockerfile" \
             "chronicle-backend"
 
         # Build workers (same Dockerfile as backend, different tag)
         build_and_push \
-            "chronicle/backends/advanced" \
-            "chronicle/backends/advanced/Dockerfile" \
+            "chronicle/backend" \
+            "chronicle/backend/Dockerfile" \
             "chronicle-workers"
 
-        # Build webui
+        # Build webui (upstream dropped its prod Dockerfile; we keep our own).
+        # Image name matches what the k8s chronicle-webui deployment pulls.
         build_and_push \
-            "chronicle/backends/advanced/webui" \
-            "chronicle/backends/advanced/webui/Dockerfile" \
-            "chronicle-webui"
+            "chronicle" \
+            "docker/chronicle-webui/Dockerfile" \
+            "chronicle/webui"
 
         info "============================================="
         info "Chronicle images pushed successfully!"
         info "  ${REGISTRY}/chronicle-backend:${TAG}"
         info "  ${REGISTRY}/chronicle-workers:${TAG}"
-        info "  ${REGISTRY}/chronicle-webui:${TAG}"
+        info "  ${REGISTRY}/chronicle/webui:${TAG}"
         info "============================================="
         ;;
 
