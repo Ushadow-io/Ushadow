@@ -5,11 +5,9 @@ Reads compose/docker-compose.infra.yml to discover available infrastructure
 services and their connection patterns. No hardcoded business logic.
 """
 
-import os
-import yaml
-from typing import Dict, List, Optional, Tuple
-from functools import lru_cache
 from pathlib import Path
+
+import yaml
 
 from src.utils.logging import get_logger
 
@@ -23,8 +21,8 @@ class InfrastructureService:
         self,
         name: str,
         image: str,
-        ports: List[str],
-        env_vars: List[str]
+        ports: list[str],
+        env_vars: list[str]
     ):
         self.name = name
         self.image = image
@@ -44,40 +42,22 @@ class InfrastructureService:
             neo4j:latest → bolt://  (neo4j uses bolt protocol)
             qdrant/qdrant → http://
         """
-        # Check service name first (most reliable)
-        name_lower = self.name.lower()
-        if "mongo" in name_lower:
-            return "mongodb"
-        elif "redis" in name_lower:
-            return "redis"
-        elif "postgres" in name_lower:
-            return "postgresql"
-        elif "neo4j" in name_lower:
-            return "bolt"  # Neo4j uses bolt protocol
-        elif "qdrant" in name_lower:
-            return "http"
-        elif "keycloak" in name_lower:
-            return "http"
-
-        # Fallback to image name
-        image_lower = self.image.lower()
-        if "mongo" in image_lower:
-            return "mongodb"
-        elif "redis" in image_lower:
-            return "redis"
-        elif "postgres" in image_lower:
-            return "postgresql"
-        elif "neo4j" in image_lower:
-            return "bolt"
-        elif "qdrant" in image_lower:
-            return "http"
-        elif "keycloak" in image_lower:
-            return "http"
-
-        # Default to http
+        scheme_map = [
+            ("mongo", "mongodb"),
+            ("redis", "redis"),
+            ("postgres", "postgresql"),
+            ("neo4j", "bolt"),
+            ("qdrant", "http"),
+            ("casdoor", "http"),
+        ]
+        for source in (self.name, self.image):
+            source_lower = source.lower()
+            for keyword, scheme in scheme_map:
+                if keyword in source_lower:
+                    return scheme
         return "http"
 
-    def _extract_default_port(self) -> Optional[int]:
+    def _extract_default_port(self) -> int | None:
         """
         Extract default port from port mappings.
 
@@ -95,10 +75,8 @@ class InfrastructureService:
         port_str = self.ports[0]
 
         # Handle ${VAR:-default}:port format
-        if "$" in port_str:
-            # Extract port after colon
-            if ":" in port_str:
-                port_str = port_str.split(":", 1)[1]
+        if "$" in port_str and ":" in port_str:
+            port_str = port_str.split(":", 1)[1]
 
         # Extract container port (after colon if present)
         if ":" in port_str:
@@ -139,23 +117,23 @@ class InfrastructureRegistry:
     services instead of hardcoding mappings.
     """
 
-    def __init__(self, compose_path: Optional[Path] = None):
+    def __init__(self, compose_path: Path | None = None):
         if compose_path is None:
             # Default to compose/docker-compose.infra.yml in project root
             project_root = Path(__file__).parent.parent.parent.parent
             compose_path = project_root / "compose" / "docker-compose.infra.yml"
 
         self.compose_path = compose_path
-        self._services: Optional[Dict[str, InfrastructureService]] = None
+        self._services: dict[str, InfrastructureService] | None = None
 
-    def _load_services(self) -> Dict[str, InfrastructureService]:
+    def _load_services(self) -> dict[str, InfrastructureService]:
         """Load infrastructure services from compose file."""
         if not self.compose_path.exists():
             logger.warning(f"Infrastructure compose file not found: {self.compose_path}")
             return {}
 
         try:
-            with open(self.compose_path, 'r') as f:
+            with open(self.compose_path) as f:
                 data = yaml.safe_load(f)
 
             services = {}
@@ -189,17 +167,17 @@ class InfrastructureRegistry:
             return {}
 
     @property
-    def services(self) -> Dict[str, InfrastructureService]:
+    def services(self) -> dict[str, InfrastructureService]:
         """Get all infrastructure services (lazy-loaded)."""
         if self._services is None:
             self._services = self._load_services()
         return self._services
 
-    def get_service(self, name: str) -> Optional[InfrastructureService]:
+    def get_service(self, name: str) -> InfrastructureService | None:
         """Get infrastructure service by name."""
         return self.services.get(name)
 
-    def get_env_var_mapping(self) -> Dict[str, List[str]]:
+    def get_env_var_mapping(self) -> dict[str, list[str]]:
         """
         Get mapping of service names to environment variable names.
 
@@ -219,7 +197,7 @@ class InfrastructureRegistry:
         """
         mapping = {}
 
-        for service_name, service in self.services.items():
+        for service_name, _service in self.services.items():
             # Convention-based mapping: {SERVICE_NAME}_URL
             base_vars = [f"{service_name.upper()}_URL"]
 
@@ -233,7 +211,7 @@ class InfrastructureRegistry:
 
         return mapping
 
-    def build_url(self, service_name: str, endpoint: str) -> Optional[str]:
+    def build_url(self, service_name: str, endpoint: str) -> str | None:
         """
         Build connection URL for a service.
 
@@ -257,7 +235,7 @@ class InfrastructureRegistry:
 
 
 # Global singleton
-_registry: Optional[InfrastructureRegistry] = None
+_registry: InfrastructureRegistry | None = None
 
 
 def get_infrastructure_registry() -> InfrastructureRegistry:

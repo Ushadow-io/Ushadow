@@ -8,13 +8,12 @@ Handles:
 - Value type routing (secrets vs non-secrets)
 """
 
-import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Optional, Dict
+from typing import Any
 
-from omegaconf import OmegaConf, DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from src.config.secrets import should_store_in_secrets
 from src.utils.logging import get_logger
@@ -26,7 +25,7 @@ logger = get_logger(__name__, prefix="Store")
 # OmegaConf Custom Resolvers
 # =============================================================================
 
-def _env_resolver(env_var_name: str, _root_: DictConfig) -> Optional[str]:
+def _env_resolver(env_var_name: str, _root_: DictConfig) -> str | None:
     """
     Search config tree for a key matching an env var name.
 
@@ -89,7 +88,7 @@ class SettingsStore:
     3. config.overrides.yaml - User modifications (gitignored)
     """
 
-    def __init__(self, config_dir: Optional[Path] = None):
+    def __init__(self, config_dir: Path | None = None):
         if config_dir is None:
             # In Docker container, config is mounted at /config
             if Path("/config").exists():
@@ -104,14 +103,18 @@ class SettingsStore:
 
         self.config_dir = Path(config_dir)
 
-        # File paths (merge order: defaults → tailscale → secrets → overrides → instance_overrides)
+        # File paths (merge order: defaults → tailscale → secrets → secrets_k8s → overrides → instance_overrides)
         self.defaults_path = self.config_dir / "config.defaults.yaml"
         self.tailscale_path = self.config_dir / "tailscale.yaml"
         self.secrets_path = self.config_dir / "SECRETS" / "secrets.yaml"
+        # Loaded after secrets.yaml only when running in Kubernetes (KUBERNETES_SERVICE_HOST is
+        # auto-injected by the cluster). Lets k8s-specific credentials override local dev values
+        # without affecting local environments where this env var is never set.
+        self.secrets_k8s_path = self.config_dir / "SECRETS" / "secrets_k8s.yaml" if os.environ.get("KUBERNETES_SERVICE_HOST") else None
         self.overrides_path = self.config_dir / "config.overrides.yaml"
         self.instance_overrides_path = self.config_dir / "instance-overrides.yaml"
 
-        self._cache: Optional[DictConfig] = None
+        self._cache: DictConfig | None = None
         self._cache_timestamp: float = 0
         # Disable cache in dev mode for faster iteration
         dev_mode = os.environ.get("DEV_MODE", "").lower() in ("true", "1", "yes")
@@ -123,7 +126,7 @@ class SettingsStore:
         self._cache_timestamp = 0
         logger.info("Cache cleared")
 
-    def _load_yaml_if_exists(self, path: Path) -> Optional[DictConfig]:
+    def _load_yaml_if_exists(self, path: Path) -> DictConfig | None:
         """Load a YAML file if it exists, return None otherwise."""
         if path.exists():
             try:
@@ -148,9 +151,8 @@ class SettingsStore:
             OmegaConf DictConfig with all values merged
         """
         # Check cache
-        if use_cache and self._cache is not None:
-            if time.time() - self._cache_timestamp < self.cache_ttl:
-                return self._cache
+        if use_cache and self._cache is not None and time.time() - self._cache_timestamp < self.cache_ttl:
+            return self._cache
 
         logger.debug("Loading configuration from all sources...")
 
@@ -174,6 +176,10 @@ class SettingsStore:
         if cfg := self._load_yaml_if_exists(self.secrets_path):
             configs.append(cfg)
             logger.debug(f"Loaded secrets from {self.secrets_path}")
+
+        if self.secrets_k8s_path and (cfg := self._load_yaml_if_exists(self.secrets_k8s_path)):
+            configs.append(cfg)
+            logger.info(f"Loaded k8s secrets overlay from {self.secrets_k8s_path}")
 
         if cfg := self._load_yaml_if_exists(self.overrides_path):
             configs.append(cfg)
@@ -261,7 +267,7 @@ class SettingsStore:
 
         return value
 
-    async def _get_config_as_dict(self) -> Dict[str, Any]:
+    async def _get_config_as_dict(self) -> dict[str, Any]:
         """Get merged config as plain Python dict."""
         config = await self.load_config()
         return OmegaConf.to_container(config, resolve=True)
@@ -340,6 +346,28 @@ class SettingsStore:
         self._save_to_file(self.overrides_path, updates)
         self._cache = None
 
+    def _route_update(self, key: str, value: Any) -> tuple[dict, dict]:
+        """Route a single key/value to (secrets_updates, overrides_updates)."""
+        if not isinstance(value, dict):
+            if should_store_in_secrets(key):
+                return {key: value}, {}
+            return {}, {key: value}
+
+        # Fast path: known secret sections go entirely to secrets
+        if key in ('api_keys', 'admin', 'security') or should_store_in_secrets(key):
+            return {key: value}, {}
+
+        # Mixed dict: split leaves by full path so e.g. infrastructure.overrides.KC_DB_PASSWORD
+        # routes to secrets.yaml even when the parent section isn't a known secret section
+        secret_leaves: dict = {}
+        config_leaves: dict = {}
+        for leaf_key, leaf_value in value.items():
+            if should_store_in_secrets(f"{key}.{leaf_key}"):
+                secret_leaves[leaf_key] = leaf_value
+            else:
+                config_leaves[leaf_key] = leaf_value
+        return ({key: secret_leaves} if secret_leaves else {}), ({key: config_leaves} if config_leaves else {})
+
     async def update(self, updates: dict) -> None:
         """
         Update settings, auto-routing to secrets.yaml or config.overrides.yaml.
@@ -353,36 +381,13 @@ class SettingsStore:
                      - Nested: {"api_keys": {"openai": "sk-..."}}
         """
         updates = self._filter_masked_values(updates)
-        secrets_updates = {}
-        overrides_updates = {}
+        secrets_updates: dict = {}
+        overrides_updates: dict = {}
 
         for key, value in updates.items():
-            if isinstance(value, dict):
-                # Fast path: known secret sections go entirely to secrets
-                if key in ('api_keys', 'admin', 'security') or should_store_in_secrets(key):
-                    secrets_updates[key] = value
-                else:
-                    # Mixed dict: check each leaf key by its full path so that
-                    # e.g. {"infrastructure.overrides.X": {"KC_DB_PASSWORD": "..."}}
-                    # correctly routes the password to secrets.yaml
-                    secret_leaves = {}
-                    config_leaves = {}
-                    for leaf_key, leaf_value in value.items():
-                        full_path = f"{key}.{leaf_key}"
-                        if should_store_in_secrets(full_path):
-                            secret_leaves[leaf_key] = leaf_value
-                        else:
-                            config_leaves[leaf_key] = leaf_value
-                    if secret_leaves:
-                        secrets_updates[key] = secret_leaves
-                    if config_leaves:
-                        overrides_updates[key] = config_leaves
-            else:
-                # Dot notation or simple key — full path is already the key
-                if should_store_in_secrets(key):
-                    secrets_updates[key] = value
-                else:
-                    overrides_updates[key] = value
+            s, o = self._route_update(key, value)
+            secrets_updates.update(s)
+            overrides_updates.update(o)
 
         if secrets_updates:
             await self.save_to_secrets(secrets_updates)
@@ -437,10 +442,10 @@ class SettingsStore:
 
 
 # Global instance
-_settings_store: Optional[SettingsStore] = None
+_settings_store: SettingsStore | None = None
 
 
-def get_settings_store(config_dir: Optional[Path] = None) -> SettingsStore:
+def get_settings_store(config_dir: Path | None = None) -> SettingsStore:
     """Get global SettingsStore instance."""
     global _settings_store
     if _settings_store is None:
