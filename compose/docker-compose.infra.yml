@@ -23,7 +23,7 @@ name: infra
 
 services:
   mongo:
-    image: mongo:8.0
+    image: mongo:8.2
     container_name: mongo
     profiles: ["infra"]
     ports:

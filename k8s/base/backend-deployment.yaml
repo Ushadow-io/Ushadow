@@ -13,6 +13,7 @@ spec:
     metadata:
       labels:
         io.kompose.service: backend
+        access-mem0: "true"
     spec:
       serviceAccountName: ushadow-backend
       containers:

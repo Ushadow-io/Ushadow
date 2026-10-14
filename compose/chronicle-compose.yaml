@@ -17,6 +17,10 @@ x-ushadow:
     description: "AI-powered voice journal and life logger with transcription and LLM analysis"
     requires: [llm, transcription]
     optional: [memory]  # Uses memory if available, works without it
+    # Pod label so the chakra-3eye NetworkPolicy 'allow-mem0-api-from-labeled'
+    # admits memory reads/writes to mem0-api.
+    k8s_pod_labels:
+      access-mem0: "true"
     tags: ["voice", "journal", "ai", "transcription", "conversation", "audio"]
     # route_path: /chronicle  # Tailscale Serve route - all /chronicle/* requests go here
     exposes:
@@ -40,6 +44,10 @@ x-ushadow:
     display_name: "Chronicle Workers"
     description: "Background workers for Chronicle (transcription, memory, audio processing)"
     requires: [llm, transcription]
+    # The 'memory' RQ queue writes extracted memories to mem0-api in chakra-3eye;
+    # this label is required by that namespace's NetworkPolicy.
+    k8s_pod_labels:
+      access-mem0: "true"
     k8s_resources:
       limits:
         cpu: "2000m"

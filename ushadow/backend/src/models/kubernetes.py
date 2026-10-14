@@ -230,7 +230,18 @@ class KubernetesDeploymentSpec(BaseModel):
 
     # Advanced options
     annotations: Dict[str, str] = Field(default_factory=dict)
-    labels: Dict[str, str] = Field(default_factory=dict)
+    labels: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Labels applied to the Deployment/Service metadata (not the pod template)."
+    )
+    pod_labels: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Extra labels applied to the pod template only, in addition to the immutable "
+            "selector labels. Use for NetworkPolicy targeting (e.g. {'access-mem0': 'true'}). "
+            "Not added to spec.selector.matchLabels, so they can change without breaking updates."
+        )
+    )
 
     # Escape hatch for power users
     custom_manifest: Optional[str] = Field(

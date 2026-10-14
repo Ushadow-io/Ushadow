@@ -12,7 +12,7 @@ from .rest_adapter import RESTAdapter
 from ..models.service import ServiceConfig, IntegrationType
 
 logger = logging.getLogger(__name__)
-
+ 
 
 class AdapterFactory:
     """Factory for creating memory adapters based on integration type."""

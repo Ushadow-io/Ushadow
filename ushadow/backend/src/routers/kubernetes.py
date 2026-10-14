@@ -414,6 +414,16 @@ async def deploy_service_to_cluster(
             k8s_spec.node_selector = provider.k8s["node_selector"]
             logger.info(f"Applied provider node_selector for {request.service_id}: {k8s_spec.node_selector}")
 
+    if not k8s_spec.pod_labels:
+        # Apply pod-template labels from compose x-ushadow (e.g. NetworkPolicy
+        # targeting like access-mem0). These land on the pod, not the selector.
+        if compose_service and compose_service.k8s_pod_labels:
+            k8s_spec.pod_labels = compose_service.k8s_pod_labels
+            logger.info(f"Applied compose k8s_pod_labels for {request.service_id}: {k8s_spec.pod_labels}")
+        elif provider and provider.k8s and provider.k8s.get("pod_labels"):
+            k8s_spec.pod_labels = provider.k8s["pod_labels"]
+            logger.info(f"Applied provider pod_labels for {request.service_id}: {k8s_spec.pod_labels}")
+
     # Auto-configure ingress if cluster has ingress configured
     if cluster.ingress_domain:
         if k8s_spec.ingress is None:

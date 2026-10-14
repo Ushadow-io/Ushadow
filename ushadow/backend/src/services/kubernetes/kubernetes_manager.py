@@ -9,9 +9,9 @@ KubernetesManager is the public facade. Internal concerns are split across:
 """
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from kubernetes.client.rest import ApiException
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -21,11 +21,12 @@ from src.models.kubernetes import (
     KubernetesClusterCreate,
     KubernetesDeploymentSpec,
 )
+from src.utils.logging import get_logger
+
 from .kubernetes_client import KubernetesClient
 from .kubernetes_cluster_store import KubernetesClusterStore
 from .kubernetes_deploy import KubernetesDeployService
 from .kubernetes_manifest_builder import KubernetesManifestBuilder
-from src.utils.logging import get_logger
 
 logger = get_logger(__name__, prefix="K8s")
 
@@ -65,25 +66,25 @@ class KubernetesManager:
     async def add_cluster(
         self,
         cluster_data: KubernetesClusterCreate,
-    ) -> Tuple[bool, Optional[KubernetesCluster], str]:
+    ) -> tuple[bool, KubernetesCluster | None, str]:
         return await self._store.add_cluster(cluster_data)
 
-    async def list_clusters(self) -> List[KubernetesCluster]:
+    async def list_clusters(self) -> list[KubernetesCluster]:
         return await self._store.list_clusters()
 
-    async def get_cluster(self, cluster_id: str) -> Optional[KubernetesCluster]:
+    async def get_cluster(self, cluster_id: str) -> KubernetesCluster | None:
         return await self._store.get_cluster(cluster_id)
 
     async def update_cluster(
-        self, cluster_id: str, updates: Dict[str, Any]
-    ) -> Optional[KubernetesCluster]:
+        self, cluster_id: str, updates: dict[str, Any]
+    ) -> KubernetesCluster | None:
         return await self._store.update_cluster(cluster_id, updates)
 
     async def remove_cluster(self, cluster_id: str) -> bool:
         return await self._store.remove_cluster(cluster_id)
 
     async def update_cluster_infra_scan(
-        self, cluster_id: str, namespace: str, scan_results: Dict[str, Dict]
+        self, cluster_id: str, namespace: str, scan_results: dict[str, dict]
     ) -> bool:
         return await self._store.update_cluster_infra_scan(cluster_id, namespace, scan_results)
 
@@ -118,10 +119,10 @@ class KubernetesManager:
 
     async def compile_service_to_k8s(
         self,
-        service_def: Dict,
+        service_def: dict,
         namespace: str = "default",
-        k8s_spec: Optional[KubernetesDeploymentSpec] = None,
-    ) -> Dict[str, Dict]:
+        k8s_spec: KubernetesDeploymentSpec | None = None,
+    ) -> dict[str, dict]:
         return await self._builder.compile_service_to_k8s(service_def, namespace, k8s_spec)
 
     # -------------------------------------------------------------------------
@@ -136,27 +137,83 @@ class KubernetesManager:
         cluster_id: str,
         namespace: str,
         service_name: str,
-        env_vars: Dict[str, str],
-    ) -> Tuple[str, str]:
+        env_vars: dict[str, str],
+    ) -> tuple[str, str]:
         return await self._deploy.get_or_create_envmap(cluster_id, namespace, service_name, env_vars)
 
     async def deploy_to_kubernetes(
         self,
         cluster_id: str,
-        service_def: Dict,
+        service_def: dict,
         namespace: str = "default",
-        k8s_spec: Optional[KubernetesDeploymentSpec] = None,
-    ) -> Tuple[bool, str]:
+        k8s_spec: KubernetesDeploymentSpec | None = None,
+    ) -> tuple[bool, str]:
         return await self._deploy.deploy_to_kubernetes(cluster_id, service_def, namespace, k8s_spec)
 
     # -------------------------------------------------------------------------
     # Cluster query operations (use the k8s API directly)
     # -------------------------------------------------------------------------
 
-    async def list_nodes(self, cluster_id: str) -> List[Any]:
-        """List all nodes in a cluster."""
+    def _parse_node_item(self, node: Any, cluster_id: str) -> Any:
+        """Parse a raw k8s node object into a KubernetesNode model."""
         from src.models.kubernetes import KubernetesNode
 
+        conditions = node.status.conditions or []
+        ready = False
+        status = "Unknown"
+        for condition in conditions:
+            if condition.type == "Ready":
+                ready = condition.status == "True"
+                status = "Ready" if ready else "NotReady"
+                break
+
+        labels = node.metadata.labels or {}
+        roles = []
+        if "node-role.kubernetes.io/control-plane" in labels or "node-role.kubernetes.io/master" in labels:
+            roles.append("control-plane")
+        if not roles or "node-role.kubernetes.io/worker" in labels:
+            roles.append("worker")
+
+        addresses = node.status.addresses or []
+        internal_ip = external_ip = hostname = None
+        for addr in addresses:
+            if addr.type == "InternalIP":
+                internal_ip = addr.address
+            elif addr.type == "ExternalIP":
+                external_ip = addr.address
+            elif addr.type == "Hostname":
+                hostname = addr.address
+
+        node_info = node.status.node_info
+        capacity = node.status.capacity or {}
+        allocatable = node.status.allocatable or {}
+        taints = [
+            {"key": t.key, "value": t.value or "", "effect": t.effect}
+            for t in (node.spec.taints or [])
+        ]
+        return KubernetesNode(
+            name=node.metadata.name,
+            cluster_id=cluster_id,
+            status=status,
+            ready=ready,
+            kubelet_version=node_info.kubelet_version if node_info else None,
+            os_image=node_info.os_image if node_info else None,
+            kernel_version=node_info.kernel_version if node_info else None,
+            container_runtime=node_info.container_runtime_version if node_info else None,
+            cpu_capacity=capacity.get("cpu"),
+            memory_capacity=capacity.get("memory"),
+            cpu_allocatable=allocatable.get("cpu"),
+            memory_allocatable=allocatable.get("memory"),
+            roles=roles,
+            internal_ip=internal_ip,
+            external_ip=external_ip,
+            hostname=hostname,
+            taints=taints,
+            labels=labels,
+        )
+
+    async def list_nodes(self, cluster_id: str) -> list[Any]:
+        """List all nodes in a cluster."""
         cluster = await self.get_cluster(cluster_id)
         if not cluster:
             raise ValueError(f"Cluster not found: {cluster_id}")
@@ -164,124 +221,67 @@ class KubernetesManager:
         try:
             core_api, _ = self._k8s_client.get_kube_client(cluster_id)
             nodes_list = core_api.list_node()
-            k8s_nodes = []
-            for node in nodes_list.items:
-                conditions = node.status.conditions or []
-                ready = False
-                status = "Unknown"
-                for condition in conditions:
-                    if condition.type == "Ready":
-                        ready = condition.status == "True"
-                        status = "Ready" if ready else "NotReady"
-                        break
-
-                labels = node.metadata.labels or {}
-                roles = []
-                if (
-                    "node-role.kubernetes.io/control-plane" in labels
-                    or "node-role.kubernetes.io/master" in labels
-                ):
-                    roles.append("control-plane")
-                if not roles or "node-role.kubernetes.io/worker" in labels:
-                    roles.append("worker")
-
-                addresses = node.status.addresses or []
-                internal_ip = external_ip = hostname = None
-                for addr in addresses:
-                    if addr.type == "InternalIP":
-                        internal_ip = addr.address
-                    elif addr.type == "ExternalIP":
-                        external_ip = addr.address
-                    elif addr.type == "Hostname":
-                        hostname = addr.address
-
-                node_info = node.status.node_info
-                capacity = node.status.capacity or {}
-                allocatable = node.status.allocatable or {}
-
-                taints = [
-                    {"key": t.key, "value": t.value or "", "effect": t.effect}
-                    for t in (node.spec.taints or [])
-                ]
-
-                k8s_nodes.append(KubernetesNode(
-                    name=node.metadata.name,
-                    cluster_id=cluster_id,
-                    status=status,
-                    ready=ready,
-                    kubelet_version=node_info.kubelet_version if node_info else None,
-                    os_image=node_info.os_image if node_info else None,
-                    kernel_version=node_info.kernel_version if node_info else None,
-                    container_runtime=node_info.container_runtime_version if node_info else None,
-                    cpu_capacity=capacity.get("cpu"),
-                    memory_capacity=capacity.get("memory"),
-                    cpu_allocatable=allocatable.get("cpu"),
-                    memory_allocatable=allocatable.get("memory"),
-                    roles=roles,
-                    internal_ip=internal_ip,
-                    external_ip=external_ip,
-                    hostname=hostname,
-                    taints=taints,
-                    labels=labels,
-                ))
-
+            k8s_nodes = [self._parse_node_item(node, cluster_id) for node in nodes_list.items]
             logger.info(f"Listed {len(k8s_nodes)} nodes for cluster {cluster_id}")
             return k8s_nodes
         except Exception as e:
             logger.error(f"Error listing nodes for cluster {cluster_id}: {e}")
-            raise ValueError(f"Failed to list nodes: {e}")
+            raise ValueError(f"Failed to list nodes: {e}") from e
 
-    async def list_pods(self, cluster_id: str, namespace: str = "ushadow") -> List[Dict[str, Any]]:
+    @staticmethod
+    def _pod_status_and_restarts(pod: Any) -> tuple[str, int]:
+        """Derive human-readable status and total restart count from a pod object."""
+        if not pod.status.container_statuses:
+            return pod.status.phase or "Pending", 0
+
+        restarts = sum(cs.restart_count for cs in pod.status.container_statuses)
+        if pod.status.phase == "Running":
+            all_ready = all(cs.ready for cs in pod.status.container_statuses)
+            status = "Running" if all_ready else "Starting"
+        else:
+            status = pod.status.phase
+        for cs in pod.status.container_statuses:
+            if cs.state.waiting:
+                status = cs.state.waiting.reason or "Waiting"
+            elif cs.state.terminated:
+                status = cs.state.terminated.reason or "Terminated"
+        return status, restarts
+
+    @staticmethod
+    def _format_pod_age(pod: Any) -> str:
+        """Return human-readable age string (e.g. '5m', '3h', '2d') for a pod."""
+        if not pod.metadata.creation_timestamp:
+            return ""
+        age_seconds = (datetime.now(UTC) - pod.metadata.creation_timestamp).total_seconds()
+        if age_seconds < 60:
+            return f"{int(age_seconds)}s"
+        if age_seconds < 3600:
+            return f"{int(age_seconds / 60)}m"
+        if age_seconds < 86400:
+            return f"{int(age_seconds / 3600)}h"
+        return f"{int(age_seconds / 86400)}d"
+
+    async def list_pods(self, cluster_id: str, namespace: str = "ushadow") -> list[dict[str, Any]]:
         """List all pods in a namespace."""
         try:
             core_api, _ = self._k8s_client.get_kube_client(cluster_id)
             pods_list = core_api.list_namespaced_pod(namespace=namespace)
             pods = []
             for pod in pods_list.items:
-                status = "Unknown"
-                restarts = 0
-                if pod.status.container_statuses:
-                    restarts = sum(cs.restart_count for cs in pod.status.container_statuses)
-                    if pod.status.phase == "Running":
-                        all_ready = all(cs.ready for cs in pod.status.container_statuses)
-                        status = "Running" if all_ready else "Starting"
-                    else:
-                        status = pod.status.phase
-                    for cs in pod.status.container_statuses:
-                        if cs.state.waiting:
-                            status = cs.state.waiting.reason or "Waiting"
-                        elif cs.state.terminated:
-                            status = cs.state.terminated.reason or "Terminated"
-                else:
-                    status = pod.status.phase or "Pending"
-
-                age = ""
-                if pod.metadata.creation_timestamp:
-                    age_seconds = (
-                        datetime.now(timezone.utc) - pod.metadata.creation_timestamp
-                    ).total_seconds()
-                    if age_seconds < 60:
-                        age = f"{int(age_seconds)}s"
-                    elif age_seconds < 3600:
-                        age = f"{int(age_seconds / 60)}m"
-                    elif age_seconds < 86400:
-                        age = f"{int(age_seconds / 3600)}h"
-                    else:
-                        age = f"{int(age_seconds / 86400)}d"
-
+                status, restarts = self._pod_status_and_restarts(pod)
                 pods.append({
                     "name": pod.metadata.name,
                     "namespace": pod.metadata.namespace,
                     "status": status,
                     "restarts": restarts,
-                    "age": age,
+                    "age": self._format_pod_age(pod),
                     "labels": pod.metadata.labels or {},
                     "node": pod.spec.node_name or "N/A",
                 })
             return pods
         except ApiException as e:
             logger.error(f"Failed to list pods: {e}")
-            raise Exception(f"Failed to list pods: {e.reason}")
+            raise Exception(f"Failed to list pods: {e.reason}") from e
         except Exception as e:
             logger.error(f"Error listing pods: {e}")
             raise
@@ -305,11 +305,11 @@ class KubernetesManager:
             )
         except ApiException as e:
             if e.status == 404:
-                raise Exception(f"Pod '{pod_name}' not found in namespace '{namespace}'")
+                raise Exception(f"Pod '{pod_name}' not found in namespace '{namespace}'") from e
             if e.status == 400:
-                raise Exception(f"Logs not available for pod '{pod_name}': {e.reason}")
+                raise Exception(f"Logs not available for pod '{pod_name}': {e.reason}") from e
             logger.error(f"Failed to get pod logs: {e}")
-            raise Exception(f"Failed to get pod logs: {e.reason}")
+            raise Exception(f"Failed to get pod logs: {e.reason}") from e
         except Exception as e:
             logger.error(f"Error getting pod logs: {e}")
             raise
@@ -319,7 +319,7 @@ class KubernetesManager:
         cluster_id: str,
         pod_name: str,
         namespace: str = "ushadow",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get events for a specific pod (useful for debugging CrashLoopBackOff etc.)."""
         try:
             core_api, _ = self._k8s_client.get_kube_client(cluster_id)
@@ -344,7 +344,7 @@ class KubernetesManager:
             return events
         except ApiException as e:
             logger.error(f"Failed to get pod events: {e}")
-            raise Exception(f"Failed to get pod events: {e.reason}")
+            raise Exception(f"Failed to get pod events: {e.reason}") from e
         except Exception as e:
             logger.error(f"Error getting pod events: {e}")
             raise
@@ -355,7 +355,7 @@ class KubernetesManager:
         service_name: str,
         namespace: str = "default",
         port: int = 8000,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Resolve the external URL for a K8s service for use outside the cluster.
 
@@ -390,11 +390,25 @@ class KubernetesManager:
 
         return None
 
+    @staticmethod
+    def _service_endpoints(svc: Any, ns: str) -> list[str]:
+        """Collect reachable endpoint strings for a k8s Service object."""
+        endpoints = []
+        for port in [p.port for p in svc.spec.ports]:
+            if svc.spec.type == "ClusterIP":
+                endpoints.append(f"{svc.metadata.name}.{ns}.svc.cluster.local:{port}")
+            elif svc.spec.type == "NodePort":
+                endpoints.append(f"<node-ip>:{port}")
+            elif svc.spec.type == "LoadBalancer" and svc.status.load_balancer.ingress:
+                lb_ip = svc.status.load_balancer.ingress[0].ip
+                endpoints.append(f"{lb_ip}:{port}")
+        return endpoints
+
     async def scan_cluster_for_infra_services(
         self,
         cluster_id: str,
         namespace: str = "ushadow",
-    ) -> Dict[str, Dict]:
+    ) -> dict[str, dict]:
         """
         Scan a cluster for common infrastructure services (mongo, redis, postgres, etc.).
 
@@ -406,7 +420,7 @@ class KubernetesManager:
             "postgres": {"names": ["postgres", "postgresql"], "port": 5432},
             "qdrant":   {"names": ["qdrant"],            "port": 6333},
             "neo4j":    {"names": ["neo4j"],             "port": 7687},
-            "keycloak": {"names": ["keycloak"],          "port": 8080},
+            "casdoor":  {"names": ["casdoor"],            "port": 8000},
         }
         namespaces_to_scan = list(dict.fromkeys(
             [namespace, "default", "kube-system", "infra", "infrastructure"]
@@ -414,7 +428,7 @@ class KubernetesManager:
 
         try:
             core_api, _ = self._k8s_client.get_kube_client(cluster_id)
-            results: Dict[str, Dict] = {}
+            results: dict[str, dict] = {}
 
             for ns in namespaces_to_scan:
                 try:
@@ -427,22 +441,9 @@ class KubernetesManager:
                         continue
                     for svc in services.items:
                         if any(p in svc.metadata.name.lower() for p in cfg["names"]):
-                            ports = [p.port for p in svc.spec.ports]
-                            endpoints = []
-                            for port in ports:
-                                if svc.spec.type == "ClusterIP":
-                                    endpoints.append(
-                                        f"{svc.metadata.name}.{ns}.svc.cluster.local:{port}"
-                                    )
-                                elif svc.spec.type == "NodePort":
-                                    endpoints.append(f"<node-ip>:{port}")
-                                elif svc.spec.type == "LoadBalancer":
-                                    if svc.status.load_balancer.ingress:
-                                        lb_ip = svc.status.load_balancer.ingress[0].ip
-                                        endpoints.append(f"{lb_ip}:{port}")
                             results[infra_name] = {
                                 "found": True,
-                                "endpoints": endpoints,
+                                "endpoints": self._service_endpoints(svc, ns),
                                 "type": infra_name,
                                 "namespace": ns,
                                 "default_port": cfg["port"],
@@ -472,7 +473,7 @@ class KubernetesManager:
 # Singleton helpers (unchanged public API)
 # ---------------------------------------------------------------------------
 
-_kubernetes_manager: Optional[KubernetesManager] = None
+_kubernetes_manager: KubernetesManager | None = None
 
 
 async def init_kubernetes_manager(db: AsyncIOMotorDatabase) -> KubernetesManager:

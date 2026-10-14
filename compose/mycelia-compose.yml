@@ -53,6 +53,13 @@ x-ushadow:
         type: health
         path: /health
         port: 5173
+    # Pod label required by chakra-sacral/gpu-coordinator NetworkPolicy
+    # (rule 2: any ns, podSelector access-gpu=true, port 8000). Without
+    # this label, calls to gpu.chakra-sacral/v1/audio/transcriptions
+    # silently time out (TCP SYN dropped by Calico). Mirrors the
+    # access-mem0 pattern used by chronicle-backend.
+    k8s_pod_labels:
+      access-gpu: "true"
   mycelia-frontend:
     display_name: "Mycelia Frontend"
     description: "Mycelia web interface"
@@ -74,6 +81,11 @@ services:
       - MYCELIA_BACKEND_URL=${MYCELIA_BACKEND_URL:-http://mycelia-backend:5173}
       # Internal cluster URL used by nginx proxy — always cluster DNS, never external Tailscale URL
       - MYCELIA_BACKEND_INTERNAL_URL=${MYCELIA_BACKEND_INTERNAL_URL:-http://mycelia-backend:5173}
+      # Public URL the browser uses to reach the backend. Resolved from
+      # settings.mycelia.backend_public_url; falls back to deriving
+      # https://mycelia-api.<tailnet> at deploy time when blank. Stage 3 will
+      # consume this to template the mycelia-frontend-runtime ConfigMap.
+      - MYCELIA_BACKEND_PUBLIC_URL=${MYCELIA_BACKEND_PUBLIC_URL:-}
       - MYCELIA_TOKEN=${MYCELIA_TOKEN:-none}
       - MYCELIA_CLIENT_ID=${MYCELIA_CLIENT_ID:-none}
     networks:
