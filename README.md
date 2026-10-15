@@ -450,20 +450,60 @@ docker compose up -d --build
 
 ## Kubernetes Deployment
 
-Kubernetes manifests are available in `deployment/k8s/`:
+ushadow (backend + web UI) is deployed with **skaffold**. It builds both images,
+pushes them to the cluster registry, and applies the kustomize bundle in `k8s/`.
+
+### One-time setup
+
+Point skaffold at the cluster registry (stored in `~/.skaffold/config`, per kube context):
 
 ```bash
-# Apply infrastructure
-kubectl apply -f deployment/k8s/infrastructure/
-
-# Apply ushadow
-kubectl apply -f deployment/k8s/ushadow/
-
-# Check status
-kubectl get pods -n ushadow
+skaffold config set --kube-context microk8s default-repo anubis:32000
+skaffold config set --kube-context microk8s insecure-registries anubis:32000
 ```
 
-See [Kubernetes Deployment Guide](docs/kubernetes-deployment.md) for details.
+Without this, skaffold tries to push to the placeholder `registry.temp.skaffold` and fails with `Bad Gateway`.
+
+### Deploy ushadow
+
+```bash
+# 1. Only if secrets changed: apply ushadow-secret from config/SECRETS/secrets_k8s.yaml
+just k8s-apply-secret
+
+# 2. Build, push and deploy
+skaffold run
+
+# 3. Check
+kubectl rollout status deploy/backend deploy/webui -n ushadow
+curl -s -o /dev/null -w "%{http_code}\n" https://ush.spangled-kettle.ts.net/health   # expect 200
+```
+
+For live rebuilds while developing, use `skaffold dev --cleanup=false`.
+
+> **Watch out**
+> - Plain `skaffold dev` **deletes** the deployment when you press Ctrl-C. Always pass `--cleanup=false`.
+> - `just k8s-deploy` applies `k8s/` without building, so pods get the placeholder image and fail. Use `skaffold run` instead.
+> - `just config-push` copies local `config/` (including `config/SECRETS/`) over the live config on the cluster. Only use it when you mean to replace live settings.
+> - `skaffold run` replaces the live `ushadow-config` ConfigMap with `k8s/configmap.yaml`.
+
+### Deploy Chronicle, Mycelia and OpenMemory
+
+These are not part of the skaffold bundle. The ushadow backend deploys them from
+`compose/*.yaml`. To ship new images, build and push to `ghcr.io/ushadow-io`, then restart:
+
+```bash
+# One-time: let docker push to ghcr.io using the GitHub CLI login (works with passkeys)
+gh auth refresh -h github.com -s write:packages
+gh auth token | docker login ghcr.io -u <github-username> --password-stdin
+
+# Build and push (also: make mycelia-push, make openmemory-push)
+make chronicle-push
+
+# Roll the cluster onto the new images
+kubectl rollout restart deploy/chronicle-backend deploy/chronicle-workers deploy/chronicle-webui -n ushadow
+```
+
+The Chronicle web UI is built from `docker/chronicle-webui/Dockerfile`, because upstream Chronicle no longer ships a production Dockerfile for it.
 
 ## Service URLs
 
