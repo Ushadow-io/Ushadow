@@ -99,9 +99,9 @@ export default function ChatPage() {
       }))
 
       // Get token from storage (Casdoor/OIDC in localStorage, or legacy token)
-      const kcToken = sessionStorage.getItem('kc_access_token')
+      const casdoorToken = localStorage.getItem('casdoor_access_token')
       const legacyToken = localStorage.getItem(getStorageKey('token'))
-      const token = kcToken || legacyToken
+      const token = casdoorToken || legacyToken
 
       // Build headers - only include Authorization if we have a valid token
       const headers: Record<string, string> = {

@@ -5,10 +5,10 @@ GET /api/connect returns everything a client needs to authenticate and connect
 to this ushadow environment, regardless of platform (Docker, Kubernetes, or
 public unode). This is the single bootstrap endpoint encoded in QR codes.
 
-Platforms:
-  docker     — private tailnet, KC via direct Tailscale IP:port
-  kubernetes — ingress-hosted, KC via KC_HOSTNAME_URL
-  public     — Tailscale Funnel, KC on the public unode (future)
+Auth is Casdoor. auth_url is the Casdoor URL reachable from the client device:
+  docker     — CASDOOR_MOBILE_URL, else the node's Tailscale IP + CASDOOR_PORT
+  kubernetes — CASDOOR_MOBILE_URL / CASDOOR_EXTERNAL_URL
+  public     — the public unode's "auth_url" metadata, else its public_url
 """
 
 import logging
@@ -25,11 +25,35 @@ router = APIRouter(prefix="/api/connect", tags=["connect"])
 class ConnectionInfo(BaseModel):
     """Everything a mobile or external client needs to connect to this environment."""
     api_url: str            # ushadow backend base URL
-    keycloak_mobile_url: str  # KC URL reachable from the client device
-    realm: str
-    mobile_client_id: str
+    auth_url: str           # Casdoor URL reachable from the client device
+    organization: str       # Casdoor organization
+    client_id: str          # Casdoor application client ID
     platform: str           # "docker" | "kubernetes" | "public"
     zone: str               # "private" | "public"
+
+
+def _casdoor() -> dict:
+    from src.config.casdoor_settings import get_casdoor_config
+
+    return get_casdoor_config()
+
+
+def _casdoor_url_for_node(tailscale_ip: str) -> str:
+    """Casdoor URL for a Docker node: explicit mobile URL, else Tailscale IP + Casdoor port."""
+    port = os.getenv("CASDOOR_PORT", "8082")
+    return _casdoor()["mobile_url"] or f"http://{tailscale_ip}:{port}"
+
+
+def _info(api_url: str, auth_url: str, platform: str, zone: str) -> ConnectionInfo:
+    casdoor = _casdoor()
+    return ConnectionInfo(
+        api_url=api_url,
+        auth_url=auth_url.rstrip("/"),
+        organization=casdoor["organization"],
+        client_id=casdoor["client_id"],
+        platform=platform,
+        zone=zone,
+    )
 
 
 @router.get("", response_model=ConnectionInfo)
@@ -44,27 +68,23 @@ async def get_connection_info(
     Get connection info for a mobile or external client.
 
     Unauthenticated — this is the bootstrap endpoint encoded in QR codes.
-    After connecting, clients use the returned api_url and keycloak_mobile_url
+    After connecting, clients use the returned api_url and auth_url
     to authenticate and access the API.
     """
-    from src.config.casdoor_settings import get_casdoor_config
     from src.utils.environment import is_kubernetes
 
-    casdoor_config = get_casdoor_config()
-    realm = casdoor_config.get("organization", "ushadow")
-
     if target_id:
-        return await _connection_info_for_target(target_id, realm)
+        return await _connection_info_for_target(target_id)
 
     if is_kubernetes():
-        return _connection_info_k8s(realm)
+        return _connection_info_k8s()
 
-    return await _connection_info_docker(realm, casdoor_config["public_url"])
+    return await _connection_info_docker()
 
 
 # ── Platform handlers ────────────────────────────────────────────────────────
 
-async def _connection_info_docker(realm: str, auth_url: str) -> ConnectionInfo:
+async def _connection_info_docker() -> ConnectionInfo:
     """Connection info for a private Docker/unode deployment."""
     from src.models.unode import UNodeRole
     from src.services.unode_manager import get_unode_manager
@@ -87,46 +107,28 @@ async def _connection_info_docker(realm: str, auth_url: str) -> ConnectionInfo:
         if ts_status.hostname
         else f"http://{leader.tailscale_ip}:{os.getenv('BACKEND_PORT', '8000')}"
     )
-
-    return ConnectionInfo(
-        api_url=api_url,
-        keycloak_mobile_url=auth_url,
-        realm=realm,
-        mobile_client_id="ushadow-mobile",
-        platform="docker",
-        zone="private",
-    )
+    return _info(api_url, _casdoor_url_for_node(leader.tailscale_ip), "docker", "private")
 
 
-def _connection_info_k8s(realm: str) -> ConnectionInfo:
+def _connection_info_k8s() -> ConnectionInfo:
     """Connection info for a Kubernetes deployment."""
-    from src.config.casdoor_settings import get_casdoor_config
-
     api_url = os.getenv("USHADOW_PUBLIC_URL", "").rstrip("/")
-    casdoor_url = get_casdoor_config().get("public_url", "").rstrip("/")
+    auth_url = _casdoor()["mobile_url"]
 
     if not api_url:
         raise HTTPException(
             status_code=503,
             detail="USHADOW_PUBLIC_URL is not set. Configure the K8s deployment.",
         )
-    if not casdoor_url:
+    if not auth_url:
         raise HTTPException(
             status_code=503,
             detail="CASDOOR_EXTERNAL_URL is not set. Configure the K8s deployment.",
         )
-
-    return ConnectionInfo(
-        api_url=api_url,
-        keycloak_mobile_url=casdoor_url,
-        realm=realm,
-        mobile_client_id="ushadow-mobile",
-        platform="kubernetes",
-        zone="private",
-    )
+    return _info(api_url, auth_url, "kubernetes", "private")
 
 
-async def _connection_info_for_target(target_id: str, realm: str) -> ConnectionInfo:
+async def _connection_info_for_target(target_id: str) -> ConnectionInfo:
     """Connection info for an explicit deploy target (public unode or specific cluster)."""
     from src.models.deploy_target import DeployTarget
 
@@ -138,60 +140,37 @@ async def _connection_info_for_target(target_id: str, realm: str) -> ConnectionI
     is_public = (target.raw_metadata.get("labels") or {}).get("zone") == "public"
 
     if target.type == "k8s":
-        # K8s cluster: public_url and KC URL come from cluster metadata
         public_url = (target.raw_metadata.get("public_url") or "").rstrip("/")
         ingress = target.raw_metadata.get("ingress_domain", "")
         api_url = public_url or (f"https://ushadow.{ingress}" if ingress else "")
-        kc_mobile_url = os.getenv("KC_HOSTNAME_URL", api_url).rstrip("/")
-
         if not api_url:
             raise HTTPException(
                 status_code=503,
                 detail=f"No public URL configured for cluster '{target.name}'.",
             )
+        auth_url = _casdoor()["mobile_url"] or api_url
+        return _info(api_url, auth_url, "kubernetes", "public" if is_public else "private")
 
-        return ConnectionInfo(
-            api_url=api_url,
-            keycloak_mobile_url=kc_mobile_url,
-            realm=realm,
-            mobile_client_id="ushadow-mobile",
-            platform="kubernetes",
-            zone="public" if is_public else "private",
-        )
-
-    # Docker unode (including public unodes)
     if is_public:
-        return _connection_info_public_unode(target, realm)
+        return _connection_info_public_unode(target)
 
     # Standard remote Docker unode — use its Tailscale IP
-    from src.config.casdoor_settings import get_casdoor_config
-
     tailscale_ip = target.raw_metadata.get("tailscale_ip")
     if not tailscale_ip:
         raise HTTPException(
             status_code=503,
             detail=f"UNode '{target.name}' has no Tailscale IP.",
         )
-
     api_url = target.raw_metadata.get("public_url") or f"http://{tailscale_ip}:8000"
-    auth_url = get_casdoor_config()["public_url"]
-    return ConnectionInfo(
-        api_url=api_url,
-        keycloak_mobile_url=auth_url,
-        realm=realm,
-        mobile_client_id="ushadow-mobile",
-        platform="docker",
-        zone="private",
-    )
+    return _info(api_url, _casdoor_url_for_node(tailscale_ip), "docker", "private")
 
 
-def _connection_info_public_unode(target, realm: str) -> ConnectionInfo:
+def _connection_info_public_unode(target) -> ConnectionInfo:
     """Connection info for a public unode (Tailscale Funnel, external access).
 
-    Public unodes expose services over Tailscale Funnel so external users
-    (outside the tailnet) can connect. KC for these users must also be
-    publicly reachable — this will be a KC instance deployed on the public
-    unode itself (not yet fully implemented).
+    External users (outside the tailnet) need a publicly reachable Casdoor.
+    Set it as the unode's "auth_url" metadata; until then the unode's
+    public_url is returned as a placeholder.
     """
     public_url = (target.raw_metadata.get("public_url") or "").rstrip("/")
     if not public_url:
@@ -201,20 +180,10 @@ def _connection_info_public_unode(target, realm: str) -> ConnectionInfo:
                    "Set public_url after Tailscale Funnel is active.",
         )
 
-    # KC on the public unode is not yet deployed — for now return the public
-    # unode's base URL as the KC URL placeholder so clients can at least
-    # discover the endpoint. This will be replaced once public KC is deployed.
-    kc_mobile_url = target.raw_metadata.get("keycloak_public_url") or public_url
-    logger.warning(
-        f"[connect] Public unode '{target.name}' KC URL not yet configured; "
-        f"returning public_url as placeholder: {kc_mobile_url}"
-    )
-
-    return ConnectionInfo(
-        api_url=public_url,
-        keycloak_mobile_url=kc_mobile_url,
-        realm=realm,
-        mobile_client_id="ushadow-public",
-        platform="public",
-        zone="public",
-    )
+    auth_url = target.raw_metadata.get("auth_url")
+    if not auth_url:
+        logger.warning(
+            f"[connect] Public unode '{target.name}' has no auth_url; "
+            f"returning public_url as placeholder: {public_url}"
+        )
+    return _info(public_url, auth_url or public_url, "public", "public")

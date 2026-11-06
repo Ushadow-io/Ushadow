@@ -7,11 +7,11 @@
 
 import { jwtDecode } from 'jwt-decode'
 
-const TOKEN_KEY = 'kc_access_token'
-const REFRESH_TOKEN_KEY = 'kc_refresh_token'
-const ID_TOKEN_KEY = 'kc_id_token'
-const EXPIRES_AT_KEY = 'kc_expires_at' // Timestamp when access_token expires
-const REFRESH_EXPIRES_AT_KEY = 'kc_refresh_expires_at' // Timestamp when refresh_token expires
+const TOKEN_KEY = 'casdoor_access_token'
+const REFRESH_TOKEN_KEY = 'casdoor_refresh_token'
+const ID_TOKEN_KEY = 'casdoor_id_token'
+const EXPIRES_AT_KEY = 'casdoor_expires_at' // Timestamp when access_token expires
+const REFRESH_EXPIRES_AT_KEY = 'casdoor_refresh_expires_at' // Timestamp when refresh_token expires
 
 interface TokenResponse {
   access_token: string
@@ -23,19 +23,15 @@ interface TokenResponse {
 }
 
 interface LoginUrlParams {
-  baseUrl: string        // Auth provider base URL (Casdoor public URL)
-  realm?: string         // not used for Casdoor
   clientId: string
   redirectUri: string
   state: string
-  authEndpoint?: string  // explicit endpoint (overrides realm-based construction)
+  authEndpoint: string   // Casdoor authorize (or signup) endpoint
 }
 
 interface LogoutUrlParams {
-  baseUrl: string        // Auth provider base URL (Casdoor public URL)
-  realm?: string
   redirectUri: string
-  logoutEndpoint?: string  // explicit endpoint
+  logoutEndpoint: string // Casdoor logout endpoint
 }
 
 interface DecodedToken {
@@ -383,14 +379,12 @@ export class TokenManager {
    * Build OAuth login URL with PKCE (Casdoor)
    */
   static async buildLoginUrl(params: LoginUrlParams): Promise<string> {
-    const { baseUrl, realm, clientId, redirectUri, state, authEndpoint } = params
+    const { clientId, redirectUri, state, authEndpoint } = params
 
     const codeVerifier = this.generateCodeVerifier()
     const codeChallenge = await this.generateCodeChallenge(codeVerifier)
     sessionStorage.setItem('pkce_code_verifier', codeVerifier)
 
-    // Use explicit authEndpoint (Casdoor) or construct from realm path (legacy)
-    const authUrl = authEndpoint || `${baseUrl}/realms/${realm}/protocol/openid-connect/auth`
     const queryParams = new URLSearchParams({
       client_id: clientId,
       redirect_uri: redirectUri,
@@ -401,14 +395,11 @@ export class TokenManager {
       code_challenge_method: 'S256',
     })
 
-    return `${authUrl}?${queryParams.toString()}`
+    return `${authEndpoint}?${queryParams.toString()}`
   }
 
   static buildLogoutUrl(params: LogoutUrlParams): string {
-    const { baseUrl, realm, redirectUri, logoutEndpoint } = params
-
-    // Use explicit logoutEndpoint (Casdoor) or construct from realm path (legacy)
-    const logoutUrl = logoutEndpoint || `${baseUrl}/realms/${realm}/protocol/openid-connect/logout`
+    const { redirectUri, logoutEndpoint } = params
     const idToken = this.getIdToken()
 
     const queryParams = new URLSearchParams({
@@ -418,7 +409,7 @@ export class TokenManager {
       queryParams.set('id_token_hint', idToken)
     }
 
-    return `${logoutUrl}?${queryParams.toString()}`
+    return `${logoutEndpoint}?${queryParams.toString()}`
   }
 
   /**
@@ -476,56 +467,6 @@ export class TokenManager {
       error: params.get('error') || undefined,
       error_description: params.get('error_description') || undefined,
     }
-  }
-
-  /**
-   * Refresh access token using refresh token directly with auth provider.
-   *
-   * @deprecated Use backend /api/auth/refresh endpoint instead.
-   * Direct provider calls can fail with "token not active" errors if the
-   * SSO session has expired or refresh token was rotated.
-   *
-   * This is the standard OAuth2/OIDC approach:
-   * - Frontend manages its own token lifecycle
-   * - No issuer mismatch issues (uses same provider URL as login)
-   * - Works from any domain (localhost, Tailscale, etc.)
-   */
-  static async refreshAccessToken(
-    baseUrl: string,
-    realm: string,
-    clientId: string
-  ): Promise<TokenResponse> {
-    const refreshToken = this.getRefreshToken()
-    if (!refreshToken) {
-      throw new Error('No refresh token available')
-    }
-
-    console.log('[TokenManager] Refreshing access token...')
-
-    const tokenUrl = `${baseUrl}/realms/${realm}/protocol/openid-connect/token`
-
-    const response = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        client_id: clientId,
-        refresh_token: refreshToken,
-      }),
-    })
-
-    if (!response.ok) {
-      const error = await response.text()
-      console.error('[TokenManager] Token refresh failed:', error)
-      throw new Error(`Token refresh failed: ${error}`)
-    }
-
-    const tokens = await response.json()
-    console.log('[TokenManager] ✅ Token refreshed successfully')
-
-    return tokens
   }
 
   // PKCE helpers

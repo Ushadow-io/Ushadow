@@ -63,7 +63,7 @@ export const api = axios.create({
 // Add request interceptor to include auth token
 api.interceptors.request.use((config) => {
   // Check for Casdoor/OIDC token first (in localStorage)
-  const kcToken = localStorage.getItem('kc_access_token')
+  const casdoorToken = localStorage.getItem('casdoor_access_token')
 
   // Check for native login token (in localStorage - persists)
   const nativeToken = localStorage.getItem('ushadow_access_token')
@@ -72,7 +72,7 @@ api.interceptors.request.use((config) => {
   const legacyToken = localStorage.getItem(getStorageKey('token'))
 
   // Priority: Casdoor > Native > Legacy (all in localStorage now)
-  const token = kcToken || nativeToken || legacyToken
+  const token = casdoorToken || nativeToken || legacyToken
 
   // Only set header if we have a valid token (not null, undefined, or the string "null")
   if (token && token !== 'null' && token !== 'undefined') {
@@ -102,9 +102,9 @@ api.interceptors.response.use(
         localStorage.removeItem(getStorageKey('token'))
         localStorage.removeItem('ushadow_access_token')
         localStorage.removeItem('ushadow_user')
-        localStorage.removeItem('kc_access_token')
-        localStorage.removeItem('kc_refresh_token')
-        localStorage.removeItem('kc_id_token')
+        localStorage.removeItem('casdoor_access_token')
+        localStorage.removeItem('casdoor_refresh_token')
+        localStorage.removeItem('casdoor_id_token')
         window.location.href = '/login'
       }
     } else if (error.code === 'ECONNABORTED') {

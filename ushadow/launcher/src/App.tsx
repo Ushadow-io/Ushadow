@@ -223,32 +223,32 @@ function App() {
       // Security: Only respond to messages from embedded environments
       // TODO: Add origin validation if needed
 
-      if (event.data.type === 'GET_KC_TOKEN') {
+      if (event.data.type === 'GET_CASDOOR_TOKEN') {
         // Get tokens from localStorage
-        const token = localStorage.getItem('kc_access_token')
-        const refreshToken = localStorage.getItem('kc_refresh_token')
-        const idToken = localStorage.getItem('kc_id_token')
+        const token = localStorage.getItem('casdoor_access_token')
+        const refreshToken = localStorage.getItem('casdoor_refresh_token')
+        const idToken = localStorage.getItem('casdoor_id_token')
 
         // Send tokens back to requesting iframe
         event.source?.postMessage(
           {
-            type: 'KC_TOKEN_RESPONSE',
+            type: 'CASDOOR_TOKEN_RESPONSE',
             tokens: { token, refreshToken, idToken },
           },
           '*' // TODO: Restrict to specific origins in production
         )
       }
 
-      if (event.data.type === 'REFRESH_KC_TOKEN') {
+      if (event.data.type === 'REFRESH_CASDOOR_TOKEN') {
         // TODO: Implement token refresh logic
         // For now, just return current tokens
-        const token = localStorage.getItem('kc_access_token')
-        const refreshToken = localStorage.getItem('kc_refresh_token')
-        const idToken = localStorage.getItem('kc_id_token')
+        const token = localStorage.getItem('casdoor_access_token')
+        const refreshToken = localStorage.getItem('casdoor_refresh_token')
+        const idToken = localStorage.getItem('casdoor_id_token')
 
         event.source?.postMessage(
           {
-            type: 'KC_TOKEN_REFRESHED',
+            type: 'CASDOOR_TOKEN_REFRESHED',
             tokens: { token, refreshToken, idToken },
           },
           '*'

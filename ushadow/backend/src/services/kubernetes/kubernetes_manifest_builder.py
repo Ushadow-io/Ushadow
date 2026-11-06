@@ -113,25 +113,9 @@ class KubernetesManifestBuilder:
         """
         Generate an OmegaConf-compatible deployment-config.yaml from env vars.
 
-        Maps well-known env var names (KEYCLOAK_*, MONGODB_*) to structured YAML.
+        Maps well-known env var names (MONGODB_*) to structured YAML.
         """
         cfg: Dict[str, Any] = {}
-
-        keycloak_config: Dict[str, Any] = {}
-        keycloak_map = {
-            "KEYCLOAK_ENABLED": ("enabled", lambda v: v.lower() in ("true", "1", "yes")),
-            "KEYCLOAK_PUBLIC_URL": ("public_url", str),
-            "KEYCLOAK_URL": ("url", str),
-            "KEYCLOAK_REALM": ("realm", str),
-            "KEYCLOAK_FRONTEND_CLIENT_ID": ("frontend_client_id", str),
-            "KEYCLOAK_BACKEND_CLIENT_ID": ("backend_client_id", str),
-            "KEYCLOAK_ADMIN_USER": ("admin_user", str),
-        }
-        for env_key, (cfg_key, cast) in keycloak_map.items():
-            if env_key in env_vars:
-                keycloak_config[cfg_key] = cast(env_vars[env_key])
-        if keycloak_config:
-            cfg["keycloak"] = keycloak_config
 
         mongodb_config: Dict[str, Any] = {}
         if "MONGODB_HOST" in env_vars:

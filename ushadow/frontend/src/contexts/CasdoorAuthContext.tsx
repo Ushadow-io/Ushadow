@@ -239,7 +239,6 @@ export function CasdoorAuthProvider({ children }: { children: ReactNode }) {
 
     // Build Casdoor login URL (async because of PKCE SHA-256)
     const loginUrl = await TokenManager.buildLoginUrl({
-      baseUrl: casdoorConfig.url,
       clientId: casdoorConfig.clientId,
       authEndpoint: casdoorConfig.authEndpoint,
       redirectUri: `${window.location.origin}/oauth/callback`,
@@ -260,7 +259,6 @@ export function CasdoorAuthProvider({ children }: { children: ReactNode }) {
     sessionStorage.setItem('oauth_state', state)
 
     const signupUrl = await TokenManager.buildLoginUrl({
-      baseUrl: casdoorConfig.url,
       clientId: casdoorConfig.clientId,
       authEndpoint: casdoorConfig.signupEndpoint,
       redirectUri: `${window.location.origin}/oauth/callback`,
@@ -274,7 +272,6 @@ export function CasdoorAuthProvider({ children }: { children: ReactNode }) {
     // Build logout URL FIRST (needs id_token from storage)
     const defaultRedirectUri = `${window.location.origin}/`
     const logoutUrl = TokenManager.buildLogoutUrl({
-      baseUrl: casdoorConfig.url,
       logoutEndpoint: casdoorConfig.logoutEndpoint,
       redirectUri: redirectUri || defaultRedirectUri,
     })
@@ -310,7 +307,7 @@ export function CasdoorAuthProvider({ children }: { children: ReactNode }) {
     console.log('[CASDOOR-AUTH] Tokens stored in localStorage')
 
     // Verify storage worked
-    const storedToken = localStorage.getItem('kc_access_token')
+    const storedToken = localStorage.getItem('casdoor_access_token')
     console.log('[CASDOOR-AUTH] Verified storage:', {
       hasStoredToken: !!storedToken,
       storedTokenPreview: storedToken?.substring(0, 30) + '...'

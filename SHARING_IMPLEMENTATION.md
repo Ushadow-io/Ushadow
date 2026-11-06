@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the conversation sharing system I've implemented for Ushadow, designed to integrate with Keycloak Fine-Grained Authorization (FGA) while remaining functional with the current JWT authentication system.
+This document describes the conversation sharing system I've implemented for Ushadow, designed to integrate with a fine-grained authorization (FGA) provider later while remaining functional with the current JWT authentication system.
 
 ## 🌐 Architecture: Behind Tailscale + Public Sharing
 
@@ -51,14 +51,14 @@ Your Private Tailnet
 - `ShareToken` - Beanie document for MongoDB storage
 - `ShareTokenCreate` - API request model
 - `ShareTokenResponse` - API response model
-- `KeycloakPolicy` - Keycloak-compatible policy structure
+- `SharePolicy` - generic policy structure
 - Enums: `ResourceType`, `SharePermission`
 
 **Service** (`ushadow/backend/src/services/share_service.py`):
 - `ShareService` - Business logic for share management
 - Token creation/validation/revocation
 - Audit logging for all access
-- Keycloak integration stubs (ready for implementation)
+- FGA fields reserved (`fga_policy_id`, `fga_resource_id`)
 
 **API Router** (`ushadow/backend/src/routers/share.py`):
 - `POST /api/share/create` - Create share token
@@ -173,13 +173,13 @@ async def _validate_user_can_share(
 **Options**:
 1. **Owner-only**: Only the user who created the resource can share it
 2. **Viewer-based**: Anyone who can view the resource can share it
-3. **Role-based**: Check Keycloak roles/permissions
+3. **Role-based**: Check Casdoor roles/permissions
 4. **Admin-only**: Only superusers can create shares
 
 **Trade-offs**:
 - Owner-only is most secure but limits collaboration
 - Viewer-based enables viral sharing but may leak sensitive data
-- Role-based requires Keycloak integration
+- Role-based requires Casdoor role checks
 - Admin-only prevents user-driven sharing
 
 **Recommended Implementation**:
@@ -193,8 +193,8 @@ if str(conversation.user_id) != str(user.id) and not user.is_superuser:
 # If user can fetch the resource, they can share it
 # (validation happens in _validate_resource_exists)
 
-# Option 3: Role-based (Keycloak)
-if not await keycloak.has_permission(user.id, resource_id, "share"):
+# Option 3: Role-based (Casdoor roles)
+if not await casdoor.has_permission(user.id, resource_id, "share"):
     raise ValueError("User lacks share permission for this resource")
 ```
 
@@ -254,64 +254,14 @@ if share_token.tailscale_only and not get_tailscale_user(request):
 
 ---
 
-### 4. Keycloak FGA Integration (`share_service.py:310-330`)
+### 4. FGA Integration (`share_service.py`)
 
-**Location**: `ShareService._register_with_keycloak()` and `_unregister_from_keycloak()`
+**Location**: `ShareService._register_with_fga()` and `_unregister_from_fga()`
 
-**Current State**: Stub methods with debug logging
+**Current State**: Stub methods with debug logging. No FGA provider is chosen yet.
 
-**Decision Point**: How should share tokens integrate with Keycloak Fine-Grained Authorization?
-
-```python
-async def _register_with_keycloak(self, share_token: ShareToken):
-    """Register share token with Keycloak FGA.
-
-    TODO: Implement Keycloak FGA registration
-    This should:
-    1. Create Keycloak resource for the shared item
-    2. Create Keycloak authorization policies
-    3. Store keycloak_policy_id and keycloak_resource_id on share_token
-    """
-```
-
-**Implementation Steps**:
-1. Create Keycloak resource:
-   ```python
-   resource = await keycloak.create_resource(
-       name=f"{share_token.resource_type}:{share_token.resource_id}",
-       type=share_token.resource_type,
-       owner=str(share_token.created_by)
-   )
-   share_token.keycloak_resource_id = resource["_id"]
-   ```
-
-2. Create authorization policies:
-   ```python
-   for policy in share_token.policies:
-       kc_policy = await keycloak.create_policy(
-           name=f"share-{share_token.token}",
-           resources=[resource["_id"]],
-           scopes=[policy.action],
-           logic="POSITIVE",
-           decision_strategy="UNANIMOUS"
-       )
-       share_token.keycloak_policy_id = kc_policy["id"]
-   ```
-
-3. Grant permissions to anonymous users (if `require_auth=False`):
-   ```python
-   if not share_token.require_auth:
-       await keycloak.create_permission(
-           name=f"anon-access-{share_token.token}",
-           policy=kc_policy["id"],
-           resources=[resource["_id"]],
-           decision_strategy="AFFIRMATIVE"
-       )
-   ```
-
-**Libraries to Consider**:
-- `python-keycloak` - Official Python client
-- `httpx` - Direct REST API calls to Keycloak
+**Decision Point**: Which fine-grained authorization provider should back share tokens,
+and should it store `fga_policy_id` / `fga_resource_id` on the share token?
 
 ---
 
@@ -512,7 +462,7 @@ curl -X DELETE http://localhost:8080/api/share/SHARE_TOKEN_UUID \
    - Resource validation
    - Authorization checks
    - Tailscale validation
-   - Keycloak integration
+   - FGA provider integration
    - Base URL configuration
 
 2. **Update Chronicle Integration**
@@ -525,7 +475,7 @@ curl -X DELETE http://localhost:8080/api/share/SHARE_TOKEN_UUID \
 
 4. **Production Configuration**
    - Set `FRONTEND_URL` environment variable
-   - Configure Keycloak if using FGA
+   - Configure an FGA provider if using one
    - Set up Tailscale Serve if using network restriction
 
 ---
@@ -641,8 +591,8 @@ else:
       }
     }
   ],
-  "keycloak_policy_id": null,
-  "keycloak_resource_id": null,
+  "fga_policy_id": null,
+  "fga_resource_id": null,
   "created_at": ISODate("2026-02-01T14:35:00Z"),
   "updated_at": ISODate("2026-02-01T15:30:00Z")
 }
@@ -661,11 +611,11 @@ else:
 
 ## 🎓 Architecture Decisions
 
-### Why Keycloak-Compatible from Day One?
+### Why a Generic Policy Structure from Day One?
 
-The share token system uses `KeycloakPolicy` structures even though Keycloak isn't integrated yet because:
+The share token system uses `SharePolicy` structures even though no FGA provider is integrated yet because:
 
-1. **Future-proof**: When Keycloak FGA is added, migration is trivial
+1. **Future-proof**: When an FGA provider is added, migration is trivial
 2. **Standards-based**: Follows OAuth2/UMA patterns
 3. **Mycelia-compatible**: Matches existing policy structure in Mycelia
 4. **Flexible**: Supports both simple permissions and complex policies
@@ -733,7 +683,7 @@ You now have a complete sharing system with:
 - ✅ Backend models, service, and API
 - ✅ Frontend UI and hooks
 - ✅ Audit logging
-- ✅ Keycloak-ready architecture
+- ✅ FGA-ready architecture
 - 📋 Clear decision points for customization
 
-The system is ready to use once you implement the 5 decision points marked with TODO comments. Start with resource validation and authorization, then add Tailscale/Keycloak integration as needed for your security requirements.
+The system is ready to use once you implement the 5 decision points marked with TODO comments. Start with resource validation and authorization, then add Tailscale/FGA integration as needed for your security requirements.

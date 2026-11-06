@@ -19,10 +19,10 @@ API tests fail at the HTTP layer (status codes, response bodies, auth tokens) �
 cd robot_tests && pixi run robot --loglevel DEBUG api/
 
 # Single suite (fastest)
-cd robot_tests && pixi run robot --loglevel DEBUG api/keycloak_auth.robot
+cd robot_tests && pixi run robot --loglevel DEBUG api/api_health_check.robot
 
 # Single test by name
-cd robot_tests && pixi run robot --loglevel DEBUG --test "TC-KC-001*" api/keycloak_auth.robot
+cd robot_tests && pixi run robot --loglevel DEBUG --test "<test name>*" api/api_health_check.robot
 ```
 
 `--loglevel DEBUG` logs the full request URL, headers, and response body for every HTTP call. Without it, you only see the status code.
@@ -111,22 +111,18 @@ Expected status 200 but got 401
 
 **Diagnosis:**
 ```bash
-# Check if token endpoint works
-curl -s -X POST http://localhost:8181/realms/ushadow/protocol/openid-connect/token \
-  -d "grant_type=password&client_id=ushadow-frontend&username=kctest@example.com&password=TestKeycloak123!" \
+# Check if the Casdoor token endpoint works (same call as `Get Casdoor Token`).
+# Credentials come from .env.test: CASDOOR_CLIENT_ID, CASDOOR_CLIENT_SECRET,
+# CASDOOR_APP_ADMIN_USER, CASDOOR_APP_ADMIN_PASSWORD.
+curl -s -X POST http://localhost:8282/api/login/oauth/access_token \
+  -H 'Content-Type: application/json' \
+  -d '{"grant_type":"password","client_id":"...","client_secret":"...","username":"...","password":"..."}' \
   | python3 -m json.tool
-
-# Check if test user exists in Keycloak
-TOKEN=$(curl -s -X POST http://localhost:8181/realms/master/protocol/openid-connect/token \
-  -d "grant_type=password&client_id=admin-cli&username=admin&password=admin" \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-curl -s -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8181/admin/realms/ushadow/users?email=kctest@example.com" | python3 -m json.tool
 ```
 
 **Common fixes:**
-- Test user not created → suite setup should call `Ensure Keycloak Test User Exists`
-- Wrong client_id in token request → check `KEYCLOAK_CLIENT_ID` in `test_env.py` (should be `ushadow-frontend` or `ushadow-cli`)
+- Casdoor app not provisioned → run `just casdoor-provision test`
+- Wrong client_id/secret → check `CASDOOR_CLIENT_ID` / `CASDOOR_CLIENT_SECRET` in `.env.test`
 - Token expired mid-suite → refresh in suite setup or request a fresh token per test
 
 ---
@@ -140,8 +136,8 @@ Expected status 200 but got 403
 
 **Cause:** Token present but insufficient permissions, or using wrong client type.
 
-**Common case — introspection with public client:**
-Keycloak's token introspection endpoint (`/protocol/openid-connect/token/introspect`) requires a **confidential client** with client credentials. The `ushadow-frontend` client is public and will get 401/403.
+**Common case — endpoint needs a role the test user lacks:**
+The test user is `CASDOOR_APP_ADMIN_USER`. Check its roles in Casdoor (`config/casdoor/*.yaml`, then `just casdoor-provision test`).
 
 **Fix:**
 ```robot
@@ -229,7 +225,7 @@ docker ps --format "table {{.Names}}\t{{.Status}}" | grep ushadow-test
 
 **Common causes:**
 - MongoDB not cleared (`✓ MongoDB test database cleared` should appear in console)
-- Keycloak not reachable at `http://localhost:8181`
+- Casdoor not reachable at `http://localhost:8282`
 - Backend health check failing at `http://localhost:8200/health`
 
 ---
@@ -239,11 +235,11 @@ docker ps --format "table {{.Names}}\t{{.Status}}" | grep ushadow-test
 ### Auth keywords (from `resources/auth_keywords.robot`)
 
 ```robot
-# Get a token for the test user
-${TOKEN}=    Get Keycloak Token    ${KEYCLOAK_TEST_EMAIL}    ${KEYCLOAK_TEST_PASSWORD}
+# Get a token for the test admin user (CASDOOR_APP_ADMIN_USER from .env.test)
+${TOKEN}=    Get Casdoor Token
 
-# Ensure the test user exists (idempotent — safe to call in setup)
-Ensure Keycloak Test User Exists
+# Or get a ready authenticated session (alias "admin_session")
+${SESSION}=    Get Admin API Session
 
 # Create auth header dict
 ${HEADERS}=    Create Dictionary    Authorization=Bearer ${TOKEN}
@@ -280,18 +276,7 @@ Should Be Equal As Integers    ${resp.status_code}    200
 
 ```bash
 # Re-run with debug logging to confirm fix
-cd robot_tests && pixi run robot --loglevel DEBUG api/keycloak_auth.robot
-```
-
-Expected output when passing:
-```
-TC-KC-001: Authenticate with Keycloak Direct Grant   | PASS |
-TC-KC-002: OAuth Authorization Code Flow (skip)      | SKIP |
-TC-KC-003: Validate Access Token                     | PASS |
-TC-KC-004: Introspect Access Token (skip)            | SKIP |
-TC-KC-005: Refresh Access Token                      | PASS |
-TC-KC-006: Logout and Revoke Tokens                  | PASS |
-6 tests, 4 passed, 0 failed, 2 skipped
+cd robot_tests && pixi run robot --loglevel DEBUG api/<suite>.robot
 ```
 
 ---
@@ -301,21 +286,18 @@ TC-KC-006: Logout and Revoke Tokens                  | PASS |
 | Service | Port | URL |
 |---------|------|-----|
 | Backend | 8200 | `http://localhost:8200` |
-| Keycloak (test) | 8181 | `http://localhost:8181` |
+| Casdoor (test) | 8282 | `http://localhost:8282` |
 | MongoDB (test) | 27118 | `mongodb://localhost:27118` |
 | Redis (test) | 6480 | `redis://localhost:6480` |
 
-Keycloak admin: `admin` / `admin`
-Test user: `kctest@example.com` / `TestKeycloak123!`
-Realm: `ushadow`
-Frontend client: `ushadow-frontend` (public)
-CLI client: `ushadow-cli` (confidential, for direct grant)
+Casdoor org: `CASDOOR_ORG_NAME` (default `ushadow`)
+Client: `CASDOOR_CLIENT_ID` (default `ushadow`)
+Test user: `CASDOOR_APP_ADMIN_USER` / `CASDOOR_APP_ADMIN_PASSWORD` from `.env.test`
 
 ## Key files
 
 | File | Purpose |
 |------|---------|
-| `robot_tests/api/keycloak_auth.robot` | Keycloak auth test suite |
 | `robot_tests/resources/auth_keywords.robot` | Shared auth keywords |
 | `robot_tests/resources/setup/test_env.py` | URLs, ports, credentials |
 | `robot_tests/resources/setup/suite_setup.robot` | Container start/stop |

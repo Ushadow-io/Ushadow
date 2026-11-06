@@ -49,7 +49,7 @@ export async function getServiceToken(
  * @returns Service token ready to use with Chronicle WebSocket
  */
 export async function getChronicleToken(): Promise<string> {
-  const accessToken = localStorage.getItem('kc_access_token')
+  const accessToken = localStorage.getItem('casdoor_access_token')
 
   if (!accessToken) {
     throw new Error('No access token found. Please log in first.')

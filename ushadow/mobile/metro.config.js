@@ -4,7 +4,7 @@ const { getDefaultConfig } = require('expo/metro-config');
 /** @type {import('expo/metro-config').MetroConfig} */
 const config = getDefaultConfig(__dirname);
 
-// Use port 8082 to avoid conflict with Keycloak on 8081
+// Metro dev server port (8081 is left free for other local services)
 config.server = { ...config.server, port: 8082 };
 
 // Suppress route warnings for non-route files

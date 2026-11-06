@@ -380,9 +380,9 @@ export async function getChronicleAudioUrl(conversationId: string, cropped: bool
   const proxyUrl = await getChronicleProxyUrl()
 
   // Get auth token - prefer Casdoor token, fallback to legacy token
-  const kcToken = localStorage.getItem('kc_access_token')
+  const casdoorToken = localStorage.getItem('casdoor_access_token')
   const legacyToken = localStorage.getItem(getStorageKey('token'))
-  const token = kcToken || legacyToken || ''
+  const token = casdoorToken || legacyToken || ''
 
   if (!token) {
     console.warn('[ChronicleAPI] No auth token found for audio URL')

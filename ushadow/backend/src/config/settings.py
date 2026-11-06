@@ -729,7 +729,7 @@ class Settings:
 
         Returns a merged dict of two layers (user store overrides win):
           1. Compose defaults from docker-compose.infra.yml for non-HOST/PORT/URL vars
-             (credential vars like MONGODB_USERNAME, KC_DB_PASSWORD default values)
+             (credential vars like MONGODB_USERNAME, POSTGRES_PASSWORD default values)
           2. User-saved manual overrides from the settings store
 
         HOST/PORT/URL vars are excluded — those come from K8s cluster scan via

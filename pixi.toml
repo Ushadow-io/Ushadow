@@ -42,9 +42,6 @@ test-robot-conversations = { cmd = "cd robot_tests && robot api/conversations.ro
 # Run Robot Framework memory tests
 test-robot-memories = { cmd = "cd robot_tests && robot api/memories.robot", depends-on = ["install-robot"] }
 
-# Run Robot Framework Keycloak auth tests
-test-robot-keycloak = { cmd = "cd robot_tests && robot api/keycloak_auth.robot", depends-on = ["install-robot"] }
-
 # Run Robot Framework browser-based OAuth tests (requires rfbrowser init first)
 test-robot-browser = { cmd = "cd robot_tests && robot browser/", depends-on = ["install-robot"] }
 

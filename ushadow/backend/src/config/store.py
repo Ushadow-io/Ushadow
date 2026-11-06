@@ -357,7 +357,7 @@ class SettingsStore:
         if key in ('api_keys', 'admin', 'security') or should_store_in_secrets(key):
             return {key: value}, {}
 
-        # Mixed dict: split leaves by full path so e.g. infrastructure.overrides.KC_DB_PASSWORD
+        # Mixed dict: split leaves by full path so e.g. infrastructure.overrides.POSTGRES_PASSWORD
         # routes to secrets.yaml even when the parent section isn't a known secret section
         secret_leaves: dict = {}
         config_leaves: dict = {}

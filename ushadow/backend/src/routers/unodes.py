@@ -541,7 +541,10 @@ async def _get_leader_info_k8s() -> LeaderInfoResponse:
         base_url = public_url
 
     ingress_host = base_url.removeprefix("https://").removeprefix("http://")
-    keycloak_url = os.getenv("KC_HOSTNAME_URL") or f"{base_url.rstrip('/')}"
+    from src.config.casdoor_settings import get_casdoor_config
+
+    # Casdoor URL the phone can reach: CASDOOR_MOBILE_URL / CASDOOR_EXTERNAL_URL, else the ingress.
+    auth_url = get_casdoor_config()["mobile_url"] or base_url
 
     return LeaderInfoResponse(
         hostname=unode.hostname if unode else ingress_host,
@@ -557,7 +560,7 @@ async def _get_leader_info_k8s() -> LeaderInfoResponse:
         api_port=443,
         ushadow_api_url=base_url,
         chronicle_api_url=f"{base_url}/api/services/chronicle-backend/proxy",
-        keycloak_url=keycloak_url,
+        auth_url=auth_url,
         audio_relay_url=f"wss://{ingress_host}/ws/audio/relay",
         unodes=[unode] if unode else [],
         services=[],  # TODO: list K8s deployed services

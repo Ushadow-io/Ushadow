@@ -94,7 +94,7 @@ This script will:
 - Auto-install `uv` (Python package manager) if not present
 - Generate secure credentials
 - Set up Docker networks
-- Start infrastructure services (Postgres, Keycloak, MongoDB, Redis, Qdrant)
+- Start infrastructure services (Postgres, Casdoor, MongoDB, Redis, Qdrant)
 - Start Chronicle backend
 - Start ushadow application in **development mode** (with Vite HMR)
 - Display access URLs and credentials
@@ -125,24 +125,27 @@ After services start, navigate to http://localhost:3000 to access the setup wiza
 
 **You don't need to start all services to complete the wizard** - skip this step and configure services as needed later.
 
-#### 2. Register a User with Keycloak
+#### 2. Register a User with Casdoor
 
-**IMPORTANT:** You must register a user with Keycloak before you can fully access the dashboard.
+**IMPORTANT:** You must register a user with Casdoor before you can fully access the dashboard.
 
 1. Wait for all services to be healthy (check with `make status`)
 2. On the login screen, click "Register" and create your account
 3. The first user created will have admin privileges
 
-**Troubleshooting Keycloak Issues:**
+**Troubleshooting Casdoor Issues:**
 
-If you encounter authentication problems, use these Makefile commands:
+If you encounter authentication problems, use these `just` recipes:
 
 ```bash
-# Delete and recreate Keycloak realm
-make keycloak-reset-realm
+# Re-apply orgs, apps and roles from config/casdoor/*.yaml
+just casdoor-provision
 
-# Complete fresh start (stops Keycloak, clears DB, restarts, imports realm)
-make keycloak-fresh-start
+# Complete fresh start: drop the Casdoor DB, then set it up again
+just casdoor-db-reset
+just casdoor-db-setup
+just casdoor-start
+just casdoor-provision
 ```
 
 ### Accessing ushadow
@@ -151,7 +154,7 @@ Once services are running and you've registered:
 
 - **Dashboard**: http://localhost:3000
 - **API Documentation**: http://localhost:8080/docs
-- **Keycloak Admin**: http://localhost:8081 (admin/admin)
+- **Casdoor Admin**: http://localhost:8082
 
 ### Helpful Commands
 
@@ -172,10 +175,6 @@ make clean          # Stop everything and remove volumes
 make svc-list                # List all services
 make restart-chronicle       # Restart specific service
 make restart-<service>       # Restart any service
-
-# Keycloak realm management
-make keycloak-reset-realm    # Delete and recreate realm
-make keycloak-fresh-start    # Complete fresh Keycloak setup
 
 # Testing
 make test                    # Run unit tests

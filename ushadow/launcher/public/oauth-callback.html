@@ -120,21 +120,21 @@
         const tokens = await response.json()
 
         // Store tokens in localStorage
-        localStorage.setItem('kc_access_token', tokens.access_token)
+        localStorage.setItem('casdoor_access_token', tokens.access_token)
         if (tokens.refresh_token) {
-          localStorage.setItem('kc_refresh_token', tokens.refresh_token)
+          localStorage.setItem('casdoor_refresh_token', tokens.refresh_token)
         }
         if (tokens.id_token) {
-          localStorage.setItem('kc_id_token', tokens.id_token)
+          localStorage.setItem('casdoor_id_token', tokens.id_token)
         }
 
         // Store expiry times
         const now = Math.floor(Date.now() / 1000)
         if (tokens.expires_in) {
-          localStorage.setItem('kc_expires_at', (now + tokens.expires_in).toString())
+          localStorage.setItem('casdoor_expires_at', (now + tokens.expires_in).toString())
         }
         if (tokens.refresh_expires_in) {
-          localStorage.setItem('kc_refresh_expires_at', (now + tokens.refresh_expires_in).toString())
+          localStorage.setItem('casdoor_refresh_expires_at', (now + tokens.refresh_expires_in).toString())
         }
 
         // Clean up

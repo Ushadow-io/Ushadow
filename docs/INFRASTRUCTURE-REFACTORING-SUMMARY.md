@@ -191,7 +191,6 @@ services:
    - postgres/postgresql → `postgresql://`
    - neo4j → `bolt://`
    - qdrant → `http://`
-   - keycloak → `http://`
 4. Default to `http://` for unknown services
 
 ---
@@ -254,7 +253,7 @@ registry = get_infrastructure_registry()
 
 # Verify services discovered from compose
 print(list(registry.services.keys()))
-# → ['mongo', 'redis', 'postgres', 'qdrant', 'neo4j', 'keycloak']
+# → ['mongo', 'redis', 'postgres', 'qdrant', 'neo4j']
 
 # Verify URL schemes inferred correctly
 print(registry.get_service('mongo').url_scheme)  # → 'mongodb'

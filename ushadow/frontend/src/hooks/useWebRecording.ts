@@ -313,9 +313,9 @@ export const useWebRecording = (): WebRecordingReturn => {
 
       // Get auth token - prefer Casdoor token, fallback to legacy token
       // This matches the pattern used in api.ts request interceptor
-      const kcToken = localStorage.getItem('kc_access_token')
+      const casdoorToken = localStorage.getItem('casdoor_access_token')
       const legacyToken = localStorage.getItem(getStorageKey('token'))
-      const token = kcToken || legacyToken
+      const token = casdoorToken || legacyToken
 
       if (!token) {
         throw new Error('No authentication token found - please log in to ushadow')
