@@ -46,7 +46,7 @@ export function parseStreamUrl(url: string): StreamUrlConfig {
       return {
         protocol: match[1] as 'ws' | 'wss',
         host: match[2],
-        path: match[3] || '/chronicle/ws_pcm',
+        path: match[3] || '/ws/audio/relay',
       };
     }
   } catch (e) {
@@ -55,7 +55,7 @@ export function parseStreamUrl(url: string): StreamUrlConfig {
   return {
     protocol: 'wss',
     host: url,
-    path: '/chronicle/ws_pcm',
+    path: '/ws/audio/relay',
   };
 }
 

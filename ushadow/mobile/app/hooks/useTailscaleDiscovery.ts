@@ -201,7 +201,7 @@ const buildApiUrl = (hostOrIp: string, port: number = LEADER_PORT): string => {
 /**
  * Helper to construct WebSocket URL with correct protocol
  */
-const buildWsUrl = (hostOrIp: string, port: number = LEADER_PORT, path: string = '/ws_pcm'): string => {
+const buildWsUrl = (hostOrIp: string, port: number = LEADER_PORT, path: string = '/ws/audio/relay'): string => {
   const protocol = hostOrIp.includes('.ts.net') ? 'wss' : 'ws';
   const portSuffix = protocol === 'wss' ? '' : `:${port}`;
   return `${protocol}://${hostOrIp}${portSuffix}${path}`;
@@ -322,9 +322,9 @@ export const useTailscaleDiscovery = (): UseDiscoveryResult => {
           tailscaleIp: info?.tailscale_ip || scannedServer.tailscaleIp,
           apiUrl: baseApiUrl,
           chronicleApiUrl: info?.chronicle_api_url,
-          streamUrl: info?.ws_pcm_url || buildWsUrl(scannedServer.tailscaleIp, scannedServer.port, '/ws_pcm'),
-          wsPcmUrl: info?.ws_pcm_url || buildWsUrl(scannedServer.tailscaleIp, scannedServer.port, '/ws_pcm'),
-          wsOmiUrl: info?.ws_omi_url || buildWsUrl(scannedServer.tailscaleIp, scannedServer.port, '/ws_omi'),
+          streamUrl: info?.ws_pcm_url || buildWsUrl(scannedServer.tailscaleIp, scannedServer.port, '/ws/audio/relay'),
+          wsPcmUrl: info?.ws_pcm_url || buildWsUrl(scannedServer.tailscaleIp, scannedServer.port, '/ws/audio/relay'),
+          wsOmiUrl: info?.ws_omi_url || buildWsUrl(scannedServer.tailscaleIp, scannedServer.port, '/ws/audio/relay'),
           role: 'leader',
           capabilities: info?.capabilities,
           leaderInfo: info || undefined,
@@ -403,9 +403,9 @@ export const useTailscaleDiscovery = (): UseDiscoveryResult => {
           tailscaleIp: info?.tailscale_ip || parsedIp,
           apiUrl: baseApiUrl,
           chronicleApiUrl: info?.chronicle_api_url,
-          streamUrl: info?.ws_pcm_url || buildWsUrl(parsedIp, parsedPort, '/ws_pcm'),
-          wsPcmUrl: info?.ws_pcm_url || buildWsUrl(parsedIp, parsedPort, '/ws_pcm'),
-          wsOmiUrl: info?.ws_omi_url || buildWsUrl(parsedIp, parsedPort, '/ws_omi'),
+          streamUrl: info?.ws_pcm_url || buildWsUrl(parsedIp, parsedPort, '/ws/audio/relay'),
+          wsPcmUrl: info?.ws_pcm_url || buildWsUrl(parsedIp, parsedPort, '/ws/audio/relay'),
+          wsOmiUrl: info?.ws_omi_url || buildWsUrl(parsedIp, parsedPort, '/ws/audio/relay'),
           role: 'leader',
           capabilities: info?.capabilities,
           leaderInfo: info || undefined,
@@ -489,9 +489,9 @@ export const useTailscaleDiscovery = (): UseDiscoveryResult => {
           tailscaleIp: info?.tailscale_ip || host,
           apiUrl: buildApiUrl(host, port),
           chronicleApiUrl: info?.chronicle_api_url,
-          streamUrl: info?.ws_pcm_url || buildWsUrl(host, port, '/ws_pcm'),
-          wsPcmUrl: info?.ws_pcm_url || buildWsUrl(host, port, '/ws_pcm'),
-          wsOmiUrl: info?.ws_omi_url || buildWsUrl(host, port, '/ws_omi'),
+          streamUrl: info?.ws_pcm_url || buildWsUrl(host, port, '/ws/audio/relay'),
+          wsPcmUrl: info?.ws_pcm_url || buildWsUrl(host, port, '/ws/audio/relay'),
+          wsOmiUrl: info?.ws_omi_url || buildWsUrl(host, port, '/ws/audio/relay'),
           role: 'leader',
           capabilities: info?.capabilities,
           leaderInfo: info || undefined,
@@ -545,9 +545,9 @@ export const useTailscaleDiscovery = (): UseDiscoveryResult => {
           tailscaleIp: info?.tailscale_ip || ip,
           apiUrl: buildApiUrl(ip, port),
           chronicleApiUrl: info?.chronicle_api_url,
-          streamUrl: info?.ws_pcm_url || buildWsUrl(ip, port, '/ws_pcm'),
-          wsPcmUrl: info?.ws_pcm_url || buildWsUrl(ip, port, '/ws_pcm'),
-          wsOmiUrl: info?.ws_omi_url || buildWsUrl(ip, port, '/ws_omi'),
+          streamUrl: info?.ws_pcm_url || buildWsUrl(ip, port, '/ws/audio/relay'),
+          wsPcmUrl: info?.ws_pcm_url || buildWsUrl(ip, port, '/ws/audio/relay'),
+          wsOmiUrl: info?.ws_omi_url || buildWsUrl(ip, port, '/ws/audio/relay'),
           role: 'leader',
           capabilities: info?.capabilities,
           leaderInfo: info || undefined,

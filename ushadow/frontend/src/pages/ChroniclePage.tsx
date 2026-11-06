@@ -165,7 +165,7 @@ export default function ChroniclePage() {
               Data Plane (WebSocket/Streaming)
             </div>
             <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-2">
-              ws_pcm, Audio Streaming → Direct connection
+              Audio streaming → Ushadow relay (/ws/audio/relay)
             </div>
             <code className="block px-2 py-1 bg-neutral-100 dark:bg-neutral-800 rounded text-xs text-neutral-700 dark:text-neutral-300">
               {chronicleInfo.direct_url}

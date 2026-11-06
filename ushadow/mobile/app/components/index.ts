@@ -8,7 +8,6 @@ export { default as ConnectionLogViewer } from './ConnectionLogViewer';
 export { default as LeaderDiscovery } from './LeaderDiscovery';
 export { default as LoginScreen } from './LoginScreen';
 export { default as QRScanner } from './QRScanner';
-export { default as StreamUrlSettings } from './StreamUrlSettings';
 export { default as UNodeList } from './UNodeList';
 
 // OMI Device Components

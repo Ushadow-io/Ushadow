@@ -77,7 +77,7 @@ export default function UNodeDetailsPage() {
   // These should match the endpoints used in chronicleApi.verifyUnodeAuth
   const [ushadowEndpoint, setUshadowEndpoint] = useState('/api/auth/me');
   const [chronicleEndpoint, setChronicleEndpoint] = useState('/api/services/chronicle-backend/proxy/users/me');
-  const [streamEndpoint, setStreamEndpoint] = useState('/chronicle/ws_pcm');
+  const [streamEndpoint, setStreamEndpoint] = useState('/ws/audio/relay');
   const [streamProtocol, setStreamProtocol] = useState<'ws' | 'wss'>('wss');
 
   // Timeout configuration (ms)
@@ -779,7 +779,7 @@ export default function UNodeDetailsPage() {
                   onChangeText={setStreamEndpoint}
                   onBlur={handleStreamConfigSave}
                   onSubmitEditing={handleStreamConfigSave}
-                  placeholder="/chronicle/ws_pcm"
+                  placeholder="/ws/audio/relay"
                   placeholderTextColor={theme.textMuted}
                   autoCapitalize="none"
                   autoCorrect={false}

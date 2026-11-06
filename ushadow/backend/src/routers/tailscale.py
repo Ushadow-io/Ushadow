@@ -1108,7 +1108,7 @@ async def start_tailscale_with_caddy(
     - /chronicle/* -> Chronicle backend (strips prefix)
     - /api/* -> Ushadow backend
     - /auth/* -> Ushadow backend
-    - /ws_pcm -> Ushadow WebSocket
+    - /ws/* -> Ushadow backend (audio: /ws/audio/relay)
     - /* -> Ushadow frontend
     """
     results = {
@@ -1359,7 +1359,7 @@ async def configure_tailscale_serve(
     """Configure Tailscale serve for routing.
 
     Sets up base routes: /api/* and /auth/* to backend, /* to frontend,
-    and WebSocket routes /ws_pcm and /ws_omi direct to Chronicle.
+    and /ws/* to backend (audio streams through /ws/audio/relay).
     Also saves the Tailscale configuration to disk.
 
     Additionally registers the Tailscale hostname with Casdoor to enable
@@ -1383,7 +1383,7 @@ async def configure_tailscale_serve(
         logger.info(f"Tailscale configuration saved to {TAILSCALE_CONFIG_FILE}")
 
         # Configure base routes using TailscaleManager
-        # This sets up Layer 1 routing: /api, /auth, /ws_pcm, /ws_omi, /
+        # This sets up Layer 1 routing: /api, /auth, /ws, /
         success = manager.configure_base_routes(
             backend_port=config.backend_port,
             frontend_port=config.frontend_port

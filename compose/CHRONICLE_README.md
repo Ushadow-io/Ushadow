@@ -127,7 +127,7 @@ Chronicle uses ushadow's existing services:
 |---------|-----|---------|
 | Chronicle API | http://localhost:8000 | Backend REST API |
 | Chronicle WebUI | http://localhost:3010 | Web dashboard |
-| Chronicle WebSocket | ws://localhost:8000/ws_pcm | Audio streaming |
+| Chronicle WebSocket | ws://localhost:8000/ws/audio | Audio streaming (audio v2, Opus) |
 | ushadow API | http://localhost:8050 | ushadow backend |
 | ushadow UI | http://localhost:3050 | ushadow dashboard |
 
@@ -163,7 +163,7 @@ Once Chronicle is running:
 
 1. **Open Chronicle mobile app**
 2. **Tap "Local Advanced Backend" preset**
-3. **Or enter custom URL**: `ws://[your-ip]:8000/ws_pcm`
+3. **Or enter custom URL**: `ws://[your-ip]:8000/ws/audio`
 4. **Test connection** (should show ✅)
 5. **Login** with Chronicle credentials
 6. **Start streaming**

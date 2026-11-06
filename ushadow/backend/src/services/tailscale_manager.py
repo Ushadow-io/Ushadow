@@ -770,7 +770,7 @@ class TailscaleManager:
         """Add a route to Tailscale serve.
 
         Args:
-            path: URL path (e.g., "/api", "/ws_pcm", or "/" for root)
+            path: URL path (e.g., "/api", "/ws", or "/" for root)
             target: Backend target (e.g., "http://backend:8000/api")
 
         Returns:
@@ -795,7 +795,7 @@ class TailscaleManager:
         """Remove a route from Tailscale serve.
 
         Args:
-            path: URL path to remove (e.g., "/api", "/ws_pcm")
+            path: URL path to remove (e.g., "/api", "/ws")
 
         Returns:
             True if successful, False otherwise

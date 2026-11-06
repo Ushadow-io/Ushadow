@@ -355,7 +355,7 @@ async def get_service_connection_info(
     2. direct_url (For WebSocket/Streaming):
        - Direct connection to service (http://localhost:{port})
        - Low latency for real-time data
-       - Use for: WebSocket, SSE, audio streaming (ws_pcm)
+       - Use for: WebSocket and SSE (audio goes through /ws/audio/relay)
 
     Example:
         const info = await api.get('/api/services/chronicle-backend/connection-info')
@@ -363,8 +363,8 @@ async def get_service_connection_info(
         // For REST APIs (conversations, queue, config)
         axios.get(`${info.proxy_url}/api/conversations`)  // -> /api/services/chronicle-backend/proxy/api/conversations
 
-        // For WebSocket streaming (ws_pcm)
-        new WebSocket(`ws://localhost:${info.port}/ws_pcm`)  // -> ws://localhost:8082/ws_pcm
+        // For WebSocket streaming
+        new WebSocket(`ws://localhost:${info.port}/ws/...`)
     """
     import httpx
     import os
@@ -484,7 +484,7 @@ async def get_service_connection_info(
 
     # Direct URL (for frontend WebSocket/streaming access)
     # Use Tailscale hostname for web access (goes through Tailscale Serve routes)
-    # WebSocket routes like /ws_pcm are configured in Tailscale Serve
+    # WebSocket routes (/ws/*) are configured in Tailscale Serve
     direct_url = None
     try:
         from src.utils.tailscale_serve import get_tailscale_status
@@ -527,7 +527,7 @@ async def get_service_connection_info(
         # Usage hints for frontend
         "usage": {
             "rest_api": f"Use proxy_url: axios.get('{proxy_url}/api/endpoint')",
-            "websocket": f"Use direct_url with path: new WebSocket(direct_url.replace('https', 'wss') + '/ws_pcm')",
+            "websocket": f"Use direct_url with path: new WebSocket(direct_url.replace('https', 'wss') + '/ws/...')",
             "streaming": f"Use direct_url with path: EventSource('{direct_url}/stream')"
         }
     }
