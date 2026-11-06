@@ -17,6 +17,7 @@ import { SettingsDialog } from './components/SettingsDialog'
 import { EmbeddedView } from './components/EmbeddedView'
 import { ProjectManager } from './components/ProjectManager'
 import { AuthButton } from './components/AuthButton'
+import { TokenManager } from './services/tokenManager'
 import { RefreshCw, Settings, Zap, Loader2, FolderOpen, Pencil, Terminal, Sliders, Package, FolderGit2, Trello, Bot } from 'lucide-react'
 import { getColors } from './utils/colors'
 import { KanbanBoard } from './components/KanbanBoard'
@@ -217,43 +218,21 @@ function App() {
   // Tauri webview supports standard browser clipboard API
   // All native keyboard shortcuts work by default: Cmd/Ctrl+Z (undo), Cmd/Ctrl+Shift+Z (redo), Cmd/Ctrl+A (select all), etc.
 
-  // Token sharing API: Listen for token requests from environment iframes
+  // Token sharing API: answer access-token requests from the embedded environment iframe.
+  // Only the launcher's own iframe gets an answer, only at its own origin, and only the
+  // access token (the refresh and ID tokens never leave the launcher).
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-      // Security: Only respond to messages from embedded environments
-      // TODO: Add origin validation if needed
+      if (event.data?.type !== 'GET_CASDOOR_TOKEN') return
 
-      if (event.data.type === 'GET_CASDOOR_TOKEN') {
-        // Get tokens from localStorage
-        const token = localStorage.getItem('casdoor_access_token')
-        const refreshToken = localStorage.getItem('casdoor_refresh_token')
-        const idToken = localStorage.getItem('casdoor_id_token')
+      const iframe = document.getElementById('embedded-iframe') as HTMLIFrameElement | null
+      if (!iframe?.contentWindow || event.source !== iframe.contentWindow) return
+      if (!iframe.src || event.origin !== new URL(iframe.src).origin) return
 
-        // Send tokens back to requesting iframe
-        event.source?.postMessage(
-          {
-            type: 'CASDOOR_TOKEN_RESPONSE',
-            tokens: { token, refreshToken, idToken },
-          },
-          '*' // TODO: Restrict to specific origins in production
-        )
-      }
-
-      if (event.data.type === 'REFRESH_CASDOOR_TOKEN') {
-        // TODO: Implement token refresh logic
-        // For now, just return current tokens
-        const token = localStorage.getItem('casdoor_access_token')
-        const refreshToken = localStorage.getItem('casdoor_refresh_token')
-        const idToken = localStorage.getItem('casdoor_id_token')
-
-        event.source?.postMessage(
-          {
-            type: 'CASDOOR_TOKEN_REFRESHED',
-            tokens: { token, refreshToken, idToken },
-          },
-          '*'
-        )
-      }
+      iframe.contentWindow.postMessage(
+        { type: 'CASDOOR_TOKEN_RESPONSE', tokens: { token: TokenManager.getAccessToken() } },
+        event.origin
+      )
     }
 
     window.addEventListener('message', handleMessage)
