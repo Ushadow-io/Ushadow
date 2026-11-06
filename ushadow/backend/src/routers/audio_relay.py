@@ -15,6 +15,8 @@ import json
 import logging
 from datetime import datetime
 
+from ..services.audio_v2 import SUBPROTOCOL as V2_SUBPROTOCOL
+from ..services.audio_v2 import run_v2_relay
 from ..services.auth import get_current_user
 
 router = APIRouter(prefix="/ws/audio", tags=["audio"])
@@ -219,7 +221,14 @@ async def audio_relay_websocket(
 
     Example:
     ws://localhost:8000/ws/audio/relay?destinations=[{"name":"chronicle","url":"ws://host/ws?codec=pcm"},{"name":"mycelia","url":"ws://host/ws?codec=pcm"}]&token=YOUR_JWT
+
+    Clients that request the chronicle.audio.v2 subprotocol get the v2 relay
+    (see services/audio_v2/relay.py) instead of the Wyoming passthrough.
     """
+    if V2_SUBPROTOCOL in websocket.scope.get("subprotocols", []):
+        await _audio_relay_v2(websocket)
+        return
+
     await websocket.accept()
     logger.info("[AudioRelay] Client connected")
 
@@ -354,6 +363,20 @@ async def audio_relay_websocket(
             await websocket.close()
         except:
             pass
+
+
+async def _audio_relay_v2(websocket: WebSocket) -> None:
+    """Chronicle audio v2: the token arrives in the ClientHello, not the URL."""
+    await websocket.accept(subprotocol=V2_SUBPROTOCOL)
+    try:
+        destinations = json.loads(websocket.query_params.get("destinations") or "[]")
+    except json.JSONDecodeError:
+        destinations = None
+    if not isinstance(destinations, list) or not destinations:
+        await websocket.close(code=1008, reason="destinations must be a non-empty array")
+        return
+    logger.info(f"[AudioRelay] v2 session, destinations: {[d.get('name') for d in destinations]}")
+    await run_v2_relay(websocket, destinations)
 
 
 @router.get("/relay/status")

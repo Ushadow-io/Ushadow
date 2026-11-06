@@ -26,12 +26,13 @@ x-ushadow:
     exposes:
       - name: audio_intake
         type: audio
-        path: /ws
+        path: /ws/audio
         port: 8000  # Internal container port
         metadata:
-          protocol: wyoming
-          formats: [pcm, opus]
-          codec_param: true  # Clients specify codec via ?codec=pcm or ?codec=opus
+          # Opus-only protobuf protocol. The Ushadow relay passes it through
+          # and unwraps the Opus packets for Wyoming destinations (Mycelia).
+          protocol: chronicle.audio.v2
+          formats: [opus]
       - name: http_api
         type: http
         path: /

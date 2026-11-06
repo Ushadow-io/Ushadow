@@ -32,6 +32,8 @@ dependencies = [
     "python-multipart>=0.0.20",
     "bcrypt>=4.2.1",
     "pyjwt>=2.10.1",
+    # Chronicle audio v2 relay (vendored audio_pb2.py is generated for 5.29)
+    "protobuf>=5.29.0,<6",
     # CORS & Middleware
     "fastapi-cors>=0.0.6",
     # Utilities
@@ -85,6 +87,8 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Generated protobuf code vendored from chronicle.
+extend-exclude = ["src/services/audio_v2/audio_pb2.py", "src/services/audio_v2/audio_pb2.pyi"]
 
 [tool.ruff.lint]
 # Enable comprehensive linting for backend excellence
