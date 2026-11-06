@@ -91,19 +91,32 @@ def servers():
     mycelia.shutdown()
 
 
-@pytest.fixture
-def client(monkeypatch):
-    async def fake_bridge(token, audiences=None):  # noqa: ARG001
-        return SERVICE_TOKEN if token == "casdoor-token" else None  # noqa: S105
+class _User:
+    id = "user-1"
+    email = "user@example.com"
 
-    monkeypatch.setattr(relay, "bridge_to_service_token", fake_bridge)
+
+@pytest.fixture
+def client(monkeypatch, servers):
+    async def fake_user(token):
+        return _User() if token == "casdoor-token" else None  # noqa: S105
+
+    async def fake_allowed():
+        return {
+            f"ws://127.0.0.1:{servers['chronicle_port']}/ws/audio",
+            f"ws://127.0.0.1:{servers['mycelia_port']}/ws/audio",
+        }
+
+    monkeypatch.setattr(relay, "get_user_from_token", fake_user)
+    monkeypatch.setattr(relay, "generate_jwt_for_service", lambda *_, **__: SERVICE_TOKEN)
+    monkeypatch.setattr(audio_relay, "_exposed_audio_urls", fake_allowed)
     app = FastAPI()
     app.include_router(audio_relay.router)
     return TestClient(app)
 
 
-def _relay_url(state) -> str:
-    destinations = [
+def _relay_url(state, extra: list | None = None) -> str:
+    destinations = [*(extra or []),
         {
             "name": "chronicle",
             "url": f"ws://127.0.0.1:{state['chronicle_port']}/ws/audio",
@@ -193,3 +206,14 @@ def test_chronicle_close_code_reaches_phone(servers, client):
             phone.receive_text()
     assert closed.value.code == 1008
     assert closed.value.reason == "INVALID_MEDIA"
+
+
+def test_unknown_destination_is_refused_before_any_connect(servers, client):
+    evil = [{"name": "evil", "url": "ws://attacker.example:8000/ws/audio?codec=opus"}]
+    with client.websocket_connect(_relay_url(servers, evil), subprotocols=[SUBPROTOCOL]) as phone:
+        phone.send_text(_hello())
+        with pytest.raises(WebSocketDisconnect) as closed:
+            phone.receive_text()
+    assert closed.value.code == 1008
+    assert "not allowed" in closed.value.reason
+    assert servers["chronicle"] == []

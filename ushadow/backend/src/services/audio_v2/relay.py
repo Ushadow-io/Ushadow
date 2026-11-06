@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -26,8 +27,11 @@ from fastapi import WebSocket
 from google.protobuf import json_format
 from google.protobuf.message import DecodeError
 
-from ..token_bridge import bridge_to_service_token
+from ..auth import generate_jwt_for_service, get_user_from_token
 from . import audio_pb2
+
+# Returns the destination URLs the server itself exposes (scheme://host:port/path).
+AllowedUrls = Callable[[], Awaitable[set[str]]]
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +61,20 @@ def split_destinations(destinations: list[dict]) -> tuple[dict, list[dict]]:
     return v2[0], [d for d in destinations if d.get("protocol") != SUBPROTOCOL]
 
 
+def url_key(url: str) -> str:
+    """scheme://host:port/path, without query or fragment, for allowlist checks."""
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
+
+
+def check_allowed(destinations: list[dict], allowed: set[str]) -> None:
+    """Refuse any destination the server does not expose itself (SSRF, token leak)."""
+    allowed_keys = {url_key(url) for url in allowed}
+    for dest in destinations:
+        if url_key(str(dest.get("url", ""))) not in allowed_keys:
+            raise RelayRefusedError(1008, f"destination {dest.get('name')!r} is not allowed")
+
+
 def _with_query(url: str, drop: set[str], add: dict[str, str]) -> str:
     parts = urlsplit(url)
     query = [(k, v) for k, v in parse_qsl(parts.query) if k not in drop and k not in add]
@@ -84,9 +102,12 @@ async def _bridged_hello(text: str) -> tuple[str, str]:
         raise RelayRefusedError(1008, "first frame must be a ClientHello") from error
     if message.WhichOneof("event") != "hello":
         raise RelayRefusedError(1008, "first frame must be a ClientHello")
-    token = await bridge_to_service_token(message.hello.bearer_token, audiences=_AUDIENCES)
-    if not token:
+    # Fail closed: only a valid Casdoor user gets a service token. Unknown tokens
+    # are never passed through, because the relay opens outbound connections.
+    user = await get_user_from_token(message.hello.bearer_token)
+    if not user:
         raise RelayRefusedError(1008, "invalid or expired token")
+    token = generate_jwt_for_service(str(user.id), user.email, audiences=_AUDIENCES)
     message.hello.bearer_token = token
     rendered = json_format.MessageToJson(message, preserving_proto_field_name=True, indent=None)
     return rendered, token
@@ -182,9 +203,11 @@ class WyomingOpusFanout:
 async def _open(
     phone: WebSocket,
     destinations: list[dict],
+    allowed_urls: AllowedUrls,
 ) -> tuple[websockets.ClientConnection, WyomingOpusFanout]:
     target, wyoming = split_destinations(destinations)
     hello, token = await _bridged_hello(await _receive_hello(phone))
+    check_allowed(destinations, await allowed_urls())
     url = _with_query(target["url"], drop={"codec", "token"}, add={})
     try:
         chronicle = await websockets.connect(url, subprotocols=[SUBPROTOCOL], ping_interval=None)
@@ -256,10 +279,19 @@ async def _pump(
         await _close_phone(phone, code, reason)
 
 
-async def run_v2_relay(phone: WebSocket, destinations: list[dict]) -> None:
-    """Relay one v2 session. The caller has accepted `phone` with SUBPROTOCOL."""
+async def run_v2_relay(
+    phone: WebSocket,
+    destinations: list[dict],
+    allowed_urls: AllowedUrls,
+) -> None:
+    """Relay one v2 session. The caller has accepted `phone` with SUBPROTOCOL.
+
+    `allowed_urls` returns the audio URLs this server exposes. The relay checks
+    every client-supplied destination against it after the user is authenticated
+    and before any outbound connection.
+    """
     try:
-        chronicle, fanout = await _open(phone, destinations)
+        chronicle, fanout = await _open(phone, destinations, allowed_urls)
     except RelayRefusedError as refused:
         logger.warning("[AudioRelayV2] Refused: %s", refused.reason)
         await _close_phone(phone, refused.code, refused.reason)

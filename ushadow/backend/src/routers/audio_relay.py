@@ -376,7 +376,19 @@ async def _audio_relay_v2(websocket: WebSocket) -> None:
         await websocket.close(code=1008, reason="destinations must be a non-empty array")
         return
     logger.info(f"[AudioRelay] v2 session, destinations: {[d.get('name') for d in destinations]}")
-    await run_v2_relay(websocket, destinations)
+    await run_v2_relay(websocket, destinations, _exposed_audio_urls)
+
+
+async def _exposed_audio_urls() -> set[str]:
+    """Audio intake URLs this server exposes; the v2 relay connects only to these."""
+    # Imported here: routers.deployments imports many services; keep relay import light.
+    from .deployments import get_exposed_urls
+
+    exposed = await get_exposed_urls(
+        url_type="audio", url_name="audio_intake", audio_format=None, status=None,
+        current_user=None,
+    )
+    return {entry["url"] for entry in exposed}
 
 
 @router.get("/relay/status")
