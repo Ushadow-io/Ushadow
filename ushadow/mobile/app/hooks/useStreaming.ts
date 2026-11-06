@@ -6,7 +6,7 @@
  */
 import { useState, useCallback, useRef } from 'react';
 import { useAudioStreamer } from './useAudioStreamer';
-import { usePhoneAudioRecorder } from './usePhoneAudioRecorder';
+import { usePhoneAudioRecorder, type PhoneCaptureSession } from './usePhoneAudioRecorder';
 import { useAppLifecycle } from './useAppLifecycle';
 import { useLiveActivity } from './useLiveActivity';
 
@@ -33,7 +33,7 @@ export const useStreaming = (): UseStreaming => {
   const streamUrlRef = useRef<string>('');
   const shouldBeStreamingRef = useRef<boolean>(false);
   const streamModeRef = useRef<'batch' | 'streaming'>('streaming');
-  const streamCodecRef = useRef<'pcm' | 'opus'>('pcm');
+  const phoneSessionRef = useRef<PhoneCaptureSession | undefined>(undefined);
 
   // Audio streamer (WebSocket)
   const {
@@ -46,7 +46,7 @@ export const useStreaming = (): UseStreaming => {
     startStreaming: wsStart,
     stopStreaming: wsStop,
     cancelRetry,
-    sendAudio,
+    sendFrame,
     getWebSocketReadyState,
   } = useAudioStreamer();
 
@@ -73,23 +73,23 @@ export const useStreaming = (): UseStreaming => {
   const startStreamingCombined = useCallback(async (
     streamUrl: string,
     mode: 'batch' | 'streaming' = 'streaming',
-    codec: 'pcm' | 'opus' = 'pcm'
+    _codec: 'pcm' | 'opus' = 'opus'
   ) => {
     setCombinedError(null);
     streamUrlRef.current = streamUrl;
     shouldBeStreamingRef.current = true;
     streamModeRef.current = mode;
-    streamCodecRef.current = codec;
 
     try {
-      console.log(`[Streaming] Starting WebSocket connection (mode: ${mode}, codec: ${codec})...`);
-      await wsStart(streamUrl, mode, codec);
+      // Audio v2 needs the capture epoch and mic capabilities before
+      // StartCapture, so the mic starts first. Frames sent before the
+      // capture binding arrives are dropped by the streamer.
+      console.log('[Streaming] Starting native Opus capture...');
+      const session = await startRecording(sendFrame);
+      phoneSessionRef.current = session;
 
-      console.log('[Streaming] WebSocket connected, starting audio recording...');
-      await startRecording((pcmBuffer: Uint8Array) => {
-        // Forward audio data to WebSocket
-        sendAudio(pcmBuffer);
-      });
+      console.log('[Streaming] Mic running, opening audio v2 connection...');
+      await wsStart(streamUrl, mode, 'opus', session);
 
       console.log('[Streaming] Streaming started successfully');
       await liveActivity.startActivity('Phone Microphone');
@@ -104,7 +104,7 @@ export const useStreaming = (): UseStreaming => {
 
       throw err;
     }
-  }, [wsStart, startRecording, sendAudio, stopRecording, wsStop, liveActivity]);
+  }, [wsStart, startRecording, sendFrame, stopRecording, wsStop, liveActivity]);
 
   // Reconnect WebSocket when app returns to foreground (mic keeps recording during standby)
   useAppLifecycle({
@@ -115,7 +115,7 @@ export const useStreaming = (): UseStreaming => {
         getWebSocketReadyState() !== WebSocket.OPEN
       ) {
         console.log('[Streaming] App foregrounded: reconnecting WebSocket (mic still recording)');
-        wsStart(streamUrlRef.current, streamModeRef.current, streamCodecRef.current)
+        wsStart(streamUrlRef.current, streamModeRef.current, 'opus', phoneSessionRef.current)
           .catch(err => console.warn('[Streaming] Foreground reconnect failed:', err));
       }
     }, [wsStart, getWebSocketReadyState]),
@@ -124,6 +124,7 @@ export const useStreaming = (): UseStreaming => {
   // Stop streaming: stop recording, then disconnect WebSocket
   const stopStreamingCombined = useCallback(async () => {
     shouldBeStreamingRef.current = false;
+    phoneSessionRef.current = undefined;
     console.log('[Streaming] Stopping streaming...');
 
     try {

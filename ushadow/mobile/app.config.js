@@ -83,6 +83,8 @@ module.exports = {
         'expo-build-properties',
         {
           android: {
+            // chronicle-duplex-audio (native Opus capture) needs Android 12+.
+            minSdkVersion: 31,
             usesCleartextTraffic: true,
             enableProguardInReleaseBuilds: false,
             enableJetifier: true,

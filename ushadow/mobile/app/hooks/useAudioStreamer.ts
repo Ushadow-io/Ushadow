@@ -1,18 +1,37 @@
 /**
  * useAudioStreamer.ts
  *
- * WebSocket audio streaming hook using Wyoming protocol.
- * Adapted from Chronicle's implementation for Ushadow mobile app.
+ * Streams raw Opus to Chronicle using the chronicle.audio.v2 protocol
+ * (see chronicle/docs/backend/audio-websocket-protocol.md).
  *
- * Wyoming Protocol: JSON header + binary payload for structured audio sessions.
+ * URL: wss://{host}/ws/audio/relay?destinations=[...]&token={jwt}
+ * The Ushadow relay forwards the v2 stream to Chronicle unchanged (after
+ * swapping the bearer token for a service token) and unwraps the Opus
+ * packets for Mycelia.
  *
- * URL Format:
- * - Audio relay: wss://{tailscale-host}/ws/audio/relay?destinations=[...]&token={jwt}
- * - The relay forwards to Chronicle/Mycelia backends internally
- * - Token is appended automatically via appendTokenToUrl()
+ * v2 has no resume: a reconnect opens a new capture session. Audio sent
+ * while disconnected is lost.
  */
+import { create } from '@bufbuild/protobuf';
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { Platform } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
+
+import {
+  CaptureCapabilitiesSchema,
+  DataPurpose,
+  DeliveryClass,
+  DeviceKind,
+  DuplexMode,
+  EffectStatusSchema,
+  InputRoute,
+  OutputRoute,
+  ProcessingProfile,
+} from '../protocol/audioV2';
+import { AudioV2Socket } from '../protocol/audioV2Socket';
+import type { VoiceCapabilities } from '../protocol/audioCapabilities';
+import type { CapturedOpusFrame } from '../protocol/capturedOpusFrame';
+import type { PhoneCaptureSession } from './usePhoneAudioRecorder';
 
 export interface UseAudioStreamer {
   isStreaming: boolean;
@@ -21,187 +40,166 @@ export interface UseAudioStreamer {
   retryCount: number;
   maxRetries: number;
   error: string | null;
-  startStreaming: (url: string, mode?: 'batch' | 'streaming', codec?: 'pcm' | 'opus') => Promise<void>;
+  /**
+   * Connect and start a capture. Pass `phone` for the phone mic; omit it for
+   * an OMI wearable. `mode` is kept for call-site compatibility. `codec` must
+   * be 'opus': Chronicle audio v2 does not accept PCM.
+   */
+  startStreaming: (
+    url: string,
+    mode?: 'batch' | 'streaming',
+    codec?: 'pcm' | 'opus',
+    phone?: PhoneCaptureSession,
+  ) => Promise<void>;
   stopStreaming: () => void;
   cancelRetry: () => void;
-  sendAudio: (audioBytes: Uint8Array) => void;
+  /** Send one raw Opus packet from an OMI wearable (stamped on arrival). */
+  sendAudio: (opusPacket: Uint8Array) => void;
+  /** Send one phone-mic frame with its native capture timestamps. */
+  sendFrame: (frame: CapturedOpusFrame) => void;
   getWebSocketReadyState: () => number | undefined;
 }
 
 export interface RelayStatus {
-  destinations: Array<{
-    name: string;
-    connected: boolean;
-    errors: number;
-  }>;
+  destinations: Array<{ name: string; connected: boolean; errors: number }>;
   bytes_relayed: number;
   chunks_relayed: number;
 }
 
 export interface UseAudioStreamerOptions {
   onLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
+  /** Not sent in audio v2 mode; kept so existing callers compile. */
   onRelayStatus?: (status: RelayStatus) => void;
 }
 
-// Wyoming Protocol Types
-interface WyomingEvent {
-  type: string;
-  data?: Record<string, unknown>;
-  version?: string;
-  payload_length?: number | null;
-}
+// Upstream Chronicle declares OMI packets as 60 ms. The server rejects any
+// packet that does not decode to exactly this duration. UNVERIFIED on our
+// device firmware: if OMI sends 10/20 ms frames, this must change.
+const WEARABLE_FRAME_MS = 60 as const;
+const PHONE_FRAME_MS = 20 as const;
 
-// Audio format constants (matching backend expectations)
-// Note: For Opus, width=0 indicates compressed format (not PCM)
-const AUDIO_FORMAT_PCM = {
-  rate: 16000,
-  width: 2,  // 16-bit PCM
-  channels: 1,
-};
-
-const AUDIO_FORMAT_OPUS = {
-  rate: 16000,
-  width: 0,  // 0 indicates Opus (compressed, not PCM)
-  channels: 1,
-  codec: 'opus',
-};
-
-// Create audio start format with specified mode and codec
-const createAudioStartFormat = (
-  mode: 'batch' | 'streaming' = 'streaming',
-  codec: 'pcm' | 'opus' = 'pcm'
-) => {
-  const baseFormat = codec === 'opus' ? AUDIO_FORMAT_OPUS : AUDIO_FORMAT_PCM;
-  return {
-    ...baseFormat,
-    mode, // batch: process after recording completes, streaming: real-time transcription
-  };
-};
-
-// Reconnection constants
 const MAX_RECONNECT_ATTEMPTS = 5;
-const MAX_SERVER_ERRORS = 5;
 const BASE_RECONNECT_MS = 3000;
 const MAX_RECONNECT_MS = 30000;
 const HEARTBEAT_MS = 25000;
 
+const inputRoutes: Record<VoiceCapabilities['input_route'], InputRoute> = {
+  built_in_mic: InputRoute.BUILT_IN_MIC,
+  bluetooth_hfp: InputRoute.BLUETOOTH_HFP,
+  wired_mic: InputRoute.WIRED_MIC,
+  usb: InputRoute.USB,
+  unknown: InputRoute.REMOTE,
+};
+
+const outputRoutes: Record<VoiceCapabilities['output_route'], OutputRoute> = {
+  speakerphone: OutputRoute.SPEAKERPHONE,
+  earpiece: OutputRoute.EARPIECE,
+  headphones: OutputRoute.HEADPHONES,
+  bluetooth_hfp: OutputRoute.BLUETOOTH_HFP,
+  usb: OutputRoute.USB,
+  remote: OutputRoute.REMOTE,
+  unknown: OutputRoute.REMOTE,
+};
+
+function typedCapabilities(capabilities: VoiceCapabilities) {
+  const effect = (value: VoiceCapabilities['aec']) => create(EffectStatusSchema, value);
+  return create(CaptureCapabilitiesSchema, {
+    duplexMode: capabilities.mode === 'duplex_full'
+      ? DuplexMode.FULL
+      : capabilities.mode === 'duplex_isolated' ? DuplexMode.ISOLATED : DuplexMode.HALF,
+    inputRoute: inputRoutes[capabilities.input_route],
+    outputRoute: outputRoutes[capabilities.output_route],
+    nativeSampleRateHz: capabilities.native_sample_rate,
+    incrementalPlayback: capabilities.incremental_playback,
+    acousticEchoCancellation: effect(capabilities.aec),
+    noiseSuppression: effect(capabilities.noise_suppression),
+  });
+}
+
+function phoneProfile(capabilities: VoiceCapabilities): ProcessingProfile {
+  if (capabilities.mode === 'duplex_full') return ProcessingProfile.DUPLEX_AEC;
+  if (capabilities.mode === 'duplex_isolated') return ProcessingProfile.DUPLEX_ISOLATED;
+  return ProcessingProfile.HALF_DUPLEX;
+}
+
+/** The relay URL carries the Ushadow token; v2 sends it in ClientHello too. */
+function tokenFromUrl(url: string): string {
+  const match = /[?&]token=([^&]+)/.exec(url);
+  return match ? decodeURIComponent(match[1]) : '';
+}
+
 export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStreamer => {
-  const { onLog, onRelayStatus } = options || {};
-  const [isStreaming, setIsStreaming] = useState<boolean>(false);
-  const [isConnecting, setIsConnecting] = useState<boolean>(false);
-  const [isRetrying, setIsRetrying] = useState<boolean>(false);
-  const [retryCount, setRetryCount] = useState<number>(0);
+  const { onLog } = options || {};
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
-  const websocketRef = useRef<WebSocket | null>(null);
-  const manuallyStoppedRef = useRef<boolean>(false);
+  const socketRef = useRef<AudioV2Socket | null>(null);
+  const manuallyStoppedRef = useRef(false);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const currentUrlRef = useRef<string>('');
-  const currentModeRef = useRef<'batch' | 'streaming'>('streaming');
-  const currentCodecRef = useRef<'pcm' | 'opus'>('pcm');
-  const reconnectAttemptsRef = useRef<number>(0);
-  const serverErrorCountRef = useRef<number>(0);
-  const audioChunkCountRef = useRef<number>(0);
+  const currentUrlRef = useRef('');
+  const phoneRef = useRef<PhoneCaptureSession | undefined>(undefined);
+  const reconnectAttemptsRef = useRef(0);
+  const sequenceRef = useRef(0);
+  const monotonicOriginRef = useRef<number | null>(null);
+  const packetCountRef = useRef(0);
+  const mountedRef = useRef(true);
+  const startStreamingRef = useRef<UseAudioStreamer['startStreaming'] | null>(null);
 
-  // Guard state updates after unmount
-  const mountedRef = useRef<boolean>(true);
-
-  useEffect(() => {
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   const setStateSafe = useCallback(<T,>(setter: (v: T) => void, val: T) => {
     if (mountedRef.current) setter(val);
   }, []);
 
-  // Send Wyoming protocol events
-  const sendWyomingEvent = useCallback(async (event: WyomingEvent, payload?: Uint8Array) => {
-    if (!websocketRef.current || websocketRef.current.readyState !== WebSocket.OPEN) {
-      console.log('[AudioStreamer] WebSocket not ready for Wyoming event');
-      return;
+  const clearTimers = useCallback(() => {
+    if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+    reconnectTimeoutRef.current = null;
+    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+    heartbeatRef.current = null;
+  }, []);
+
+  const closeSocket = useCallback(async (graceful: boolean) => {
+    const socket = socketRef.current;
+    socketRef.current = null;
+    if (!socket) return;
+    if (graceful) {
+      try { await socket.stopCapture(); } catch { /* socket may already be gone */ }
     }
-    try {
-      // Match web implementation - don't add version field
-      event.payload_length = payload ? payload.length : null;
+    socket.close();
+  }, []);
 
-      const jsonHeader = JSON.stringify(event) + '\n';
-      websocketRef.current.send(jsonHeader);
-
-      if (payload?.length) {
-        // Send binary payload exactly like web implementation
-        websocketRef.current.send(new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength));
-      }
-    } catch (e) {
-      const errorMessage = (e as Error).message || 'Error sending Wyoming event.';
-      console.error('[AudioStreamer] Error sending Wyoming event:', errorMessage);
-      setStateSafe(setError, errorMessage);
-    }
-  }, [setStateSafe]);
-
-  // Stop streaming
   const stopStreaming = useCallback(async () => {
     manuallyStoppedRef.current = true;
-
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
-    if (heartbeatRef.current) {
-      clearInterval(heartbeatRef.current);
-      heartbeatRef.current = null;
-    }
-
-    if (websocketRef.current) {
-      try {
-        // Send audio-stop best-effort
-        if (websocketRef.current.readyState === WebSocket.OPEN) {
-          const audioStopEvent: WyomingEvent = { type: 'audio-stop', data: { timestamp: Date.now() } };
-          await sendWyomingEvent(audioStopEvent);
-        }
-      } catch {}
-      try {
-        websocketRef.current.close(1000, 'manual-stop');
-      } catch {}
-      websocketRef.current = null;
-    }
-
+    clearTimers();
+    await closeSocket(true);
     onLog?.('disconnected', 'Manually stopped streaming');
-
     setStateSafe(setIsStreaming, false);
     setStateSafe(setIsConnecting, false);
     setStateSafe(setIsRetrying, false);
     setStateSafe(setRetryCount, 0);
     reconnectAttemptsRef.current = 0;
-  }, [sendWyomingEvent, setStateSafe, onLog]);
+  }, [clearTimers, closeSocket, onLog, setStateSafe]);
 
-  // Cancel retry attempts
   const cancelRetry = useCallback(() => {
-    console.log('[AudioStreamer] Cancelling retry attempts');
     manuallyStoppedRef.current = true;
-
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
-
+    if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+    reconnectTimeoutRef.current = null;
     setStateSafe(setIsRetrying, false);
     setStateSafe(setIsConnecting, false);
     setStateSafe(setRetryCount, 0);
     reconnectAttemptsRef.current = 0;
   }, [setStateSafe]);
 
-  // Reconnect with exponential backoff
   const attemptReconnect = useCallback(() => {
     if (manuallyStoppedRef.current || !currentUrlRef.current) {
-      console.log('[AudioStreamer] Not reconnecting: manually stopped or missing URL');
       setStateSafe(setIsRetrying, false);
       return;
     }
     if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
-      console.log('[AudioStreamer] Reconnect attempts exhausted');
       manuallyStoppedRef.current = true;
       onLog?.('error', 'Failed to reconnect after multiple attempts', `Max attempts: ${MAX_RECONNECT_ATTEMPTS}`);
       setStateSafe(setIsStreaming, false);
@@ -211,261 +209,172 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
       setStateSafe(setError, 'Failed to reconnect after multiple attempts.');
       return;
     }
-
     const attempt = reconnectAttemptsRef.current + 1;
-    const delay = Math.min(MAX_RECONNECT_MS, BASE_RECONNECT_MS * Math.pow(2, reconnectAttemptsRef.current));
+    const delay = Math.min(MAX_RECONNECT_MS, BASE_RECONNECT_MS * 2 ** reconnectAttemptsRef.current);
     reconnectAttemptsRef.current = attempt;
-
-    console.log(`[AudioStreamer] Reconnect attempt ${attempt}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms`);
     onLog?.('connecting', `Reconnecting (attempt ${attempt}/${MAX_RECONNECT_ATTEMPTS})`, `Delay: ${delay}ms`);
-
-    if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
     setStateSafe(setIsConnecting, true);
     setStateSafe(setIsRetrying, true);
     setStateSafe(setRetryCount, attempt);
-
+    if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
     reconnectTimeoutRef.current = setTimeout(() => {
-      if (!manuallyStoppedRef.current) {
-        startStreaming(currentUrlRef.current, currentModeRef.current, currentCodecRef.current)
-          .then(() => {
-            // Connection successful, reset retry state
-            setStateSafe(setIsRetrying, false);
-            setStateSafe(setRetryCount, 0);
-          })
-          .catch(err => {
-            console.error('[AudioStreamer] Reconnection failed:', (err as Error).message || err);
-            attemptReconnect();
-          });
-      }
+      reconnectTimeoutRef.current = null;
+      if (manuallyStoppedRef.current) return;
+      startStreamingRef.current?.(currentUrlRef.current, 'streaming', 'opus', phoneRef.current)
+        .then(() => {
+          setStateSafe(setIsRetrying, false);
+          setStateSafe(setRetryCount, 0);
+        })
+        .catch(err => {
+          console.error('[AudioStreamer] Reconnection failed:', (err as Error).message || err);
+          attemptReconnect();
+        });
     }, delay);
-  }, [setStateSafe, onLog]);
+  }, [onLog, setStateSafe]);
 
-  // Start streaming
   const startStreaming = useCallback(async (
     url: string,
-    mode: 'batch' | 'streaming' = 'streaming',
-    codec: 'pcm' | 'opus' = 'pcm'
+    _mode: 'batch' | 'streaming' = 'streaming',
+    codec: 'pcm' | 'opus' = 'opus',
+    phone?: PhoneCaptureSession,
   ): Promise<void> => {
     const trimmed = (url || '').trim();
     if (!trimmed) {
-      const errorMsg = 'WebSocket URL is required.';
-      setStateSafe(setError, errorMsg);
-      return Promise.reject(new Error(errorMsg));
+      setStateSafe(setError, 'WebSocket URL is required.');
+      throw new Error('WebSocket URL is required.');
     }
-
-    currentModeRef.current = mode;
-    currentCodecRef.current = codec;
-    manuallyStoppedRef.current = false;
-
-    // Add codec parameter to URL if not already present
-    let finalUrl = trimmed;
-    if (!finalUrl.includes('codec=')) {
-      const separator = finalUrl.includes('?') ? '&' : '?';
-      finalUrl = `${finalUrl}${separator}codec=${codec}`;
-      console.log(`[AudioStreamer] Added codec parameter: ${codec}`);
+    if (codec !== 'opus') {
+      const msg = 'Chronicle audio v2 accepts Opus only; PCM streaming is no longer supported.';
+      setStateSafe(setError, msg);
+      throw new Error(msg);
     }
-
-    currentUrlRef.current = finalUrl;
-
-    // Network gate
     const netState = await NetInfo.fetch();
     if (!netState.isConnected || !netState.isInternetReachable) {
-      const errorMsg = 'No internet connection.';
-      setStateSafe(setError, errorMsg);
-      return Promise.reject(new Error(errorMsg));
+      setStateSafe(setError, 'No internet connection.');
+      throw new Error('No internet connection.');
     }
 
-    console.log(`[AudioStreamer] Initializing WebSocket: ${finalUrl}`);
-    console.log(`[AudioStreamer] Network state:`, netState);
-    onLog?.('connecting', 'Initializing WebSocket connection', finalUrl);
-    if (websocketRef.current) await stopStreaming();
-
+    manuallyStoppedRef.current = false;
+    currentUrlRef.current = trimmed;
+    phoneRef.current = phone;
+    clearTimers();
+    await closeSocket(false);
     setStateSafe(setIsConnecting, true);
     setStateSafe(setError, null);
+    onLog?.('connecting', 'Opening audio v2 connection', trimmed.replace(/token=[^&]+/, 'token=***'));
 
-    return new Promise<void>((resolve, reject) => {
-      try {
-        console.log(`[AudioStreamer] Creating WebSocket connection...`);
-        const ws = new WebSocket(finalUrl);
-        console.log(`[AudioStreamer] WebSocket object created, waiting for connection...`);
-
-        ws.onopen = async () => {
-          console.log('[AudioStreamer] WebSocket open');
-          onLog?.('connected', 'WebSocket connected successfully', `Mode: ${currentModeRef.current}, Codec: ${currentCodecRef.current}`);
-
-          // Set binary type to arraybuffer (matches web implementation)
-          if (ws.binaryType !== 'arraybuffer') {
-            ws.binaryType = 'arraybuffer';
-          }
-
-          websocketRef.current = ws;
-          reconnectAttemptsRef.current = 0;
-          serverErrorCountRef.current = 0;
-          audioChunkCountRef.current = 0; // Reset audio chunk counter
-          setStateSafe(setIsConnecting, false);
-          setStateSafe(setIsStreaming, true);
-          setStateSafe(setError, null);
-
-          // Start heartbeat
-          if (heartbeatRef.current) clearInterval(heartbeatRef.current);
-          heartbeatRef.current = setInterval(() => {
-            try {
-              if (websocketRef.current?.readyState === WebSocket.OPEN) {
-                websocketRef.current.send(JSON.stringify({ type: 'ping', t: Date.now() }));
-              }
-            } catch {}
-          }, HEARTBEAT_MS);
-
-          try {
-            const audioStartEvent: WyomingEvent = {
-              type: 'audio-start',
-              data: createAudioStartFormat(currentModeRef.current, currentCodecRef.current)
-            };
-            console.log(`[AudioStreamer] Sending audio-start event - mode: ${currentModeRef.current}, codec: ${currentCodecRef.current}`);
-            await sendWyomingEvent(audioStartEvent);
-            console.log('[AudioStreamer] audio-start sent successfully');
-          } catch (e) {
-            console.error('[AudioStreamer] audio-start failed:', e);
-          }
-
-          resolve();
-        };
-
-        ws.onmessage = (event) => {
-          console.log('[AudioStreamer] Message:', event.data);
-
-          // Parse message to check for errors and status updates
-          try {
-            const data = typeof event.data === 'string' ? JSON.parse(event.data) : null;
-            if (data) {
-              // Handle relay_status message
-              if (data.type === 'relay_status' && data.data) {
-                console.log('[AudioStreamer] Relay status:', data.data);
-                onRelayStatus?.(data.data as RelayStatus);
-              }
-              // Check for error responses from server
-              else if (data.type === 'error' || data.error || data.status === 'error') {
-                serverErrorCountRef.current += 1;
-                const errorMsg = data.message || data.error || 'Server error';
-                console.error(`[AudioStreamer] Server error ${serverErrorCountRef.current}/${MAX_SERVER_ERRORS}: ${errorMsg}`);
-                onLog?.('error', `Server error (${serverErrorCountRef.current}/${MAX_SERVER_ERRORS})`, errorMsg);
-                setStateSafe(setError, errorMsg);
-
-                // Auto-stop after too many consecutive server errors
-                if (serverErrorCountRef.current >= MAX_SERVER_ERRORS) {
-                  console.log('[AudioStreamer] Too many server errors, stopping stream');
-                  onLog?.('error', 'Too many server errors, stopped stream', `${MAX_SERVER_ERRORS} consecutive errors`);
-                  manuallyStoppedRef.current = true;
-                  ws.close(1000, 'too-many-errors');
-                  setStateSafe(setError, `Stopped: ${errorMsg} (${MAX_SERVER_ERRORS} errors)`);
-                }
-              } else {
-                // Reset error count on successful message
-                serverErrorCountRef.current = 0;
-              }
-            }
-          } catch {
-            // Non-JSON message, ignore parse error
-          }
-        };
-
-        ws.onerror = (e) => {
-          const msg = (e as ErrorEvent).message || 'WebSocket connection error.';
-          console.error('[AudioStreamer] Error:', msg);
-          onLog?.('error', 'WebSocket connection error', msg);
-          setStateSafe(setError, msg);
-          setStateSafe(setIsConnecting, false);
-          setStateSafe(setIsStreaming, false);
-          if (websocketRef.current === ws) websocketRef.current = null;
-          reject(new Error(msg));
-        };
-
-        ws.onclose = (event) => {
-          console.log('[AudioStreamer] Closed. Code:', event.code, 'Reason:', event.reason);
-          const isManual = event.code === 1000 && (event.reason === 'manual-stop' || event.reason === 'too-many-errors');
-
-          if (!isManual) {
-            onLog?.('disconnected', 'WebSocket connection closed', `Code: ${event.code}, Reason: ${event.reason || 'none'}`);
-          }
-
-          setStateSafe(setIsConnecting, false);
-          setStateSafe(setIsStreaming, false);
-
-          if (websocketRef.current === ws) websocketRef.current = null;
-
-          if (!isManual && !manuallyStoppedRef.current) {
-            setStateSafe(setError, 'Connection closed; attempting to reconnect.');
-            attemptReconnect();
-          }
-        };
-      } catch (e) {
-        const msg = (e as Error).message || 'Failed to create WebSocket.';
-        console.error('[AudioStreamer] Create WS error:', msg);
-        setStateSafe(setError, msg);
-        setStateSafe(setIsConnecting, false);
+    const socket = new AudioV2Socket({
+      url: trimmed,
+      bearerToken: tokenFromUrl(trimmed),
+      sourceId: phone ? 'phone-mic' : 'omi',
+      displayName: phone ? 'phone-mic' : 'omi',
+      deviceKind: phone
+        ? (Platform.OS === 'ios' ? DeviceKind.IOS_PHONE : DeviceKind.ANDROID_PHONE)
+        : DeviceKind.OMI,
+      uplinkFrameDurationMs: phone ? PHONE_FRAME_MS : WEARABLE_FRAME_MS,
+      onClosed: () => {
+        if (socketRef.current !== socket) return;
+        socketRef.current = null;
+        if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+        heartbeatRef.current = null;
         setStateSafe(setIsStreaming, false);
-        reject(new Error(msg));
-      }
-    });
-  }, [attemptReconnect, sendWyomingEvent, setStateSafe, stopStreaming]);
-
-  // Send audio data
-  const sendAudio = useCallback(async (audioBytes: Uint8Array) => {
-    if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN && audioBytes.length > 0) {
-      try {
-        // Log first and every 50th chunk
-        audioChunkCountRef.current++;
-        if (audioChunkCountRef.current === 1 || audioChunkCountRef.current % 50 === 0) {
-          console.log(`[AudioStreamer] Sending audio chunk #${audioChunkCountRef.current}: ${audioBytes.length} bytes (codec: ${currentCodecRef.current})`);
+        setStateSafe(setIsConnecting, false);
+        if (!manuallyStoppedRef.current) {
+          onLog?.('disconnected', 'Audio connection closed');
+          setStateSafe(setError, 'Connection closed; attempting to reconnect.');
+          attemptReconnect();
         }
-        // Use format based on current codec
-        const audioFormat = currentCodecRef.current === 'opus' ? AUDIO_FORMAT_OPUS : AUDIO_FORMAT_PCM;
-        const audioChunkEvent: WyomingEvent = { type: 'audio-chunk', data: audioFormat };
-        await sendWyomingEvent(audioChunkEvent, audioBytes);
-      } catch (e) {
-        const msg = (e as Error).message || 'Error sending audio data.';
-        console.error('[AudioStreamer] sendAudio error:', msg);
-        setStateSafe(setError, msg);
-      }
-    } else {
-      console.log(
-        `[AudioStreamer] NOT sending audio. hasWS=${!!websocketRef.current
-        } ready=${websocketRef.current?.readyState === WebSocket.OPEN
-        } bytes=${audioBytes.length}`
-      );
+      },
+      onDiagnostic: event => {
+        if (event.stage === 'server_error' || event.stage === 'transport_closed') {
+          console.warn(`[AudioStreamer] ${event.stage}: ${event.detail ?? ''}`);
+        }
+      },
+    });
+    socketRef.current = socket;
+
+    try {
+      await socket.connect();
+      sequenceRef.current = 0;
+      monotonicOriginRef.current = null;
+      packetCountRef.current = 0;
+      const capabilities = phone ? typedCapabilities(phone.capabilities) : undefined;
+      await socket.beginCapture({
+        captureEpoch: phone?.captureEpoch ?? 0,
+        processingProfile: phone ? phoneProfile(phone.capabilities) : ProcessingProfile.SOURCE_NATIVE,
+        dataPurpose: DataPurpose.NORMAL_CAPTURE,
+        deliveryClass: DeliveryClass.LIVE,
+        capabilities,
+      });
+      if (capabilities) socket.voiceReady(capabilities);
+      heartbeatRef.current = setInterval(() => {
+        try { socket.heartbeat(performance.now()); } catch { /* closed */ }
+      }, HEARTBEAT_MS);
+      reconnectAttemptsRef.current = 0;
+      onLog?.('connected', 'Audio v2 capture started', phone ? 'phone mic' : 'wearable');
+      setStateSafe(setIsConnecting, false);
+      setStateSafe(setIsStreaming, true);
+    } catch (cause) {
+      const msg = cause instanceof Error ? cause.message : 'Audio v2 connection failed';
+      onLog?.('error', 'Audio v2 connection failed', msg);
+      if (socketRef.current === socket) socketRef.current = null;
+      socket.close();
+      setStateSafe(setError, msg);
+      setStateSafe(setIsConnecting, false);
+      setStateSafe(setIsStreaming, false);
+      throw cause instanceof Error ? cause : new Error(msg);
     }
-  }, [sendWyomingEvent, setStateSafe]);
+  }, [attemptReconnect, clearTimers, closeSocket, onLog, setStateSafe]);
 
-  const getWebSocketReadyState = useCallback(() => websocketRef.current?.readyState, []);
+  startStreamingRef.current = startStreaming;
 
-  // Connectivity-triggered reconnect
+  const sendPacket = useCallback((opus: Uint8Array, capturedAtMs: number, monotonicMs: number) => {
+    const socket = socketRef.current;
+    if (!socket?.activeBinding || socket.readyState !== WebSocket.OPEN || !opus.length) return;
+    monotonicOriginRef.current ??= monotonicMs;
+    try {
+      socket.sendPacket({
+        sequence: sequenceRef.current++,
+        capturedAtMs,
+        monotonicOffsetUs: Math.max(0, Math.round((monotonicMs - monotonicOriginRef.current) * 1000)),
+        deviceMonotonicTimestampUs: monotonicMs * 1000,
+        opus,
+      });
+      packetCountRef.current += 1;
+      if (packetCountRef.current === 1 || packetCountRef.current % 250 === 0) {
+        console.log(`[AudioStreamer] Sent packet #${packetCountRef.current} (${opus.length} bytes)`);
+      }
+    } catch (e) {
+      setStateSafe(setError, (e as Error).message || 'Error sending audio data.');
+    }
+  }, [setStateSafe]);
+
+  const sendAudio = useCallback((opusPacket: Uint8Array) => {
+    if (phoneRef.current) return; // phone frames go through sendFrame
+    sendPacket(opusPacket, Date.now(), performance.now());
+  }, [sendPacket]);
+
+  const sendFrame = useCallback((frame: CapturedOpusFrame) => {
+    const phone = phoneRef.current;
+    if (!phone || frame.captureEpoch !== phone.captureEpoch) return;
+    sendPacket(frame.opus, frame.capturedAtMs, frame.monotonicTimestampMs);
+  }, [sendPacket]);
+
+  const getWebSocketReadyState = useCallback(() => socketRef.current?.readyState, []);
+
+  // Reconnect when the network comes back
   useEffect(() => {
     const sub = NetInfo.addEventListener(state => {
       const online = !!state.isConnected && !!state.isInternetReachable;
-      if (online && !manuallyStoppedRef.current) {
-        const ready = websocketRef.current?.readyState;
-        if (ready !== WebSocket.OPEN && currentUrlRef.current) {
-          console.log('[AudioStreamer] Network back; scheduling reconnect');
-          attemptReconnect();
-        }
+      if (online && !manuallyStoppedRef.current && currentUrlRef.current
+        && socketRef.current?.readyState !== WebSocket.OPEN && !reconnectTimeoutRef.current) {
+        attemptReconnect();
       }
     });
     return () => sub();
   }, [attemptReconnect]);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
-      if (heartbeatRef.current) {
-        clearInterval(heartbeatRef.current);
-        heartbeatRef.current = null;
-      }
-    };
-  }, []);
+  useEffect(() => () => clearTimers(), [clearTimers]);
 
   return {
     isStreaming,
@@ -478,6 +387,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
     stopStreaming,
     cancelRetry,
     sendAudio,
+    sendFrame,
     getWebSocketReadyState,
   };
 };

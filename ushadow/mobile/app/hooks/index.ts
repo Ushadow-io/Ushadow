@@ -40,7 +40,6 @@ export type { UseConnectionHealth } from './useConnectionHealth';
 export { useDeviceConnection } from './useDeviceConnection';
 export { useDeviceScanning } from './useDeviceScanning';
 export { useAudioListener } from './useAudioListener';
-export { useAudioManager } from './useAudioManager';
 
 // Auth hooks
 export { useTokenMonitor } from './useTokenMonitor';

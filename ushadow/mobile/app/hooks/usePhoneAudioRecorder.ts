@@ -1,335 +1,162 @@
 /**
  * usePhoneAudioRecorder.ts
  *
- * Audio recording hook using react-native-audio-record for real-time PCM streaming.
- * Streams actual microphone audio data via callback for WebSocket transmission.
+ * Phone microphone capture through the native chronicle-duplex-audio module
+ * (vendored from Chronicle, see modules/chronicle-duplex-audio).
  *
- * Audio format: 16kHz, mono, 16-bit PCM (matching Chronicle backend expectations)
+ * The OS mic driver gives PCM; the module encodes it on-device with the
+ * platform Opus encoder (iOS AVAudioConverter, Android MediaCodec) and emits
+ * 16 kHz mono 20 ms raw Opus packets. Chronicle audio v2 accepts only Opus.
+ *
+ * Requires Android 12 (API 31) or newer.
  */
-import { useState, useRef, useCallback, useEffect } from 'react';
-import { Alert, Platform } from 'react-native';
-import AudioRecord from 'react-native-audio-record';
-import { Audio } from 'expo-av';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Alert, PermissionsAndroid, Platform } from 'react-native';
+// @ts-ignore - no type declarations available
+import base64 from 'react-native-base64';
+
+import {
+  addOpusFrameListener,
+  startVoiceSession,
+  stopVoiceSession,
+} from '../../modules/chronicle-duplex-audio';
+import type { VoiceCapabilities } from '../protocol/audioCapabilities';
+import {
+  capturedOpusFrameFromNative,
+  type CapturedOpusFrame,
+} from '../protocol/capturedOpusFrame';
+
+const FIRST_FRAME_TIMEOUT_MS = 3_000;
+
+export interface PhoneCaptureSession {
+  captureEpoch: number;
+  capabilities: VoiceCapabilities;
+}
 
 export interface UsePhoneAudioRecorder {
   isRecording: boolean;
   isInitializing: boolean;
   error: string | null;
+  /** 0-100, smoothed, for the level meter. */
   audioLevel: number;
-  startRecording: (onAudioData: (pcmBuffer: Uint8Array) => void) => Promise<void>;
+  startRecording: (onFrame: (frame: CapturedOpusFrame) => void) => Promise<PhoneCaptureSession>;
   stopRecording: () => Promise<void>;
 }
 
-// Audio recording configuration (Chronicle expects 16kHz, mono, 16-bit)
-const AUDIO_OPTIONS = {
-  sampleRate: 16000,
-  channels: 1,
-  bitsPerSample: 16,
-  audioSource: 6, // VOICE_RECOGNITION (best for speech)
-  wavFile: 'audio.wav', // Temporary file name
-};
-
-// Calculate audio level from PCM samples with gain boost for visualization
-const calculateAudioLevel = (buffer: Uint8Array): number => {
-  if (buffer.length === 0) return 0;
-
-  // Calculate RMS (Root Mean Square) from 16-bit PCM samples
-  let sum = 0;
-  const samples = buffer.length / 2; // 16-bit = 2 bytes per sample
-
-  for (let i = 0; i < buffer.length; i += 2) {
-    // Read 16-bit signed integer (little-endian)
-    const sample = (buffer[i + 1] << 8) | buffer[i];
-    const signed = sample > 32767 ? sample - 65536 : sample;
-    sum += signed * signed;
+function decodeBase64(value: string): Uint8Array {
+  const binary = base64.decode(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
   }
+  return bytes;
+}
 
-  const rms = Math.sqrt(sum / samples);
-  // Apply gain boost for better visualization (speech is typically quieter than max volume)
-  // Use logarithmic scaling to handle wide dynamic range
-  const normalized = Math.min(100, (rms / 32768) * 1000); // 5x boost from 200 to 1000
-  return normalized;
-};
+async function requestMicPermission(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true; // iOS prompts on first engine start
+  const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+  if (result === PermissionsAndroid.RESULTS.GRANTED) return true;
+  Alert.alert(
+    'Microphone Permission Required',
+    'Please enable microphone access in your device settings to use audio streaming.',
+    [{ text: 'OK' }],
+  );
+  return false;
+}
 
 export const usePhoneAudioRecorder = (): UsePhoneAudioRecorder => {
-  const [isRecording, setIsRecording] = useState<boolean>(false);
-  const [isInitializing, setIsInitializing] = useState<boolean>(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [audioLevel, setAudioLevel] = useState<number>(0);
+  const [audioLevel, setAudioLevel] = useState(0);
+  const mountedRef = useRef(true);
+  const captureEpochRef = useRef(0);
+  const subscriptionRef = useRef<{ remove: () => void } | null>(null);
+  const firstFrameTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const onAudioDataRef = useRef<((pcmBuffer: Uint8Array) => void) | null>(null);
-  const mountedRef = useRef<boolean>(true);
-  const audioLevelIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const audioLevelRef = useRef<number>(0); // Store latest audio level in ref
-  const partialChunkBuffer = useRef<Uint8Array>(new Uint8Array(0)); // Buffer for partial samples
-
-  // Safe state setter
-  const setStateSafe = useCallback(<T,>(setter: (v: T) => void, val: T) => {
-    if (mountedRef.current) setter(val);
-  }, []);
-
-  // Request microphone permissions
-  const requestPermissions = useCallback(async (): Promise<boolean> => {
-    try {
-      const { status } = await Audio.requestPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert(
-          'Microphone Permission Required',
-          'Please enable microphone access in your device settings to use audio streaming.',
-          [{ text: 'OK' }]
-        );
-        return false;
-      }
-      return true;
-    } catch (err) {
-      console.error('[PhoneAudioRecorder] Permission error:', err);
-      return false;
+  const clearCapture = useCallback(() => {
+    if (firstFrameTimeoutRef.current) clearTimeout(firstFrameTimeoutRef.current);
+    firstFrameTimeoutRef.current = null;
+    subscriptionRef.current?.remove();
+    subscriptionRef.current = null;
+    if (mountedRef.current) {
+      setIsRecording(false);
+      setIsInitializing(false);
+      setAudioLevel(0);
     }
   }, []);
 
-  // Store data handler ref so we can remove it
-  const dataHandlerRef = useRef<((data: string) => void) | null>(null);
-
-  // Initialize audio recorder
-  const initializeRecorder = useCallback(() => {
-    console.log('[PhoneAudioRecorder] Initializing audio recorder with options:', AUDIO_OPTIONS);
-
-    // Check if native module is available
-    if (!AudioRecord || typeof AudioRecord.init !== 'function') {
-      throw new Error('AudioRecord native module not available - did you rebuild the app?');
-    }
-
-    // Remove old listener if exists
-    if (dataHandlerRef.current) {
-      console.log('[PhoneAudioRecorder] Removing old audio data listener');
-      try {
-        AudioRecord.removeListener('data', dataHandlerRef.current);
-      } catch (e) {
-        console.warn('[PhoneAudioRecorder] Failed to remove old listener:', e);
-      }
-    }
-
-    AudioRecord.init(AUDIO_OPTIONS);
-
-    // Set up data callback - this receives real PCM audio data
-    let chunkCount = 0;
-    const dataHandler = (data: string) => {
-      chunkCount++;
-      if (chunkCount === 1 || chunkCount % 50 === 0) {
-        console.log(`[PhoneAudioRecorder] Received audio chunk #${chunkCount}, size: ${data.length} bytes (base64)`);
-      }
-
-      if (!onAudioDataRef.current) {
-        console.warn('[PhoneAudioRecorder] No callback set, discarding audio data');
-        return;
-      }
-
-      try {
-        // Convert base64 PCM data to Uint8Array
-        const binaryString = atob(data);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-
-        if (chunkCount === 1) {
-          console.log(`[PhoneAudioRecorder] First chunk decoded: ${bytes.length} bytes PCM`);
-        }
-
-        // Align audio data to 2-byte boundaries (16-bit PCM)
-        // If we have a partial sample from last chunk, prepend it
-        let combinedBytes: Uint8Array;
-        if (partialChunkBuffer.current.length > 0) {
-          combinedBytes = new Uint8Array(partialChunkBuffer.current.length + bytes.length);
-          combinedBytes.set(partialChunkBuffer.current, 0);
-          combinedBytes.set(bytes, partialChunkBuffer.current.length);
-        } else {
-          combinedBytes = bytes;
-        }
-
-        // Calculate aligned length (must be even for 16-bit PCM)
-        const alignedLength = Math.floor(combinedBytes.length / 2) * 2;
-        const remainder = combinedBytes.length - alignedLength;
-
-        // Send aligned portion
-        const alignedBytes = combinedBytes.slice(0, alignedLength);
-        if (alignedBytes.length > 0) {
-          onAudioDataRef.current(alignedBytes);
-
-          // Calculate and update audio level for visualization
-          const level = calculateAudioLevel(alignedBytes);
-          audioLevelRef.current = level;
-        }
-
-        // Store remainder for next chunk
-        if (remainder > 0) {
-          partialChunkBuffer.current = combinedBytes.slice(alignedLength);
-          if (chunkCount <= 5) {
-            console.log(`[PhoneAudioRecorder] Buffered ${remainder} partial bytes for next chunk`);
-          }
-        } else {
-          partialChunkBuffer.current = new Uint8Array(0);
-        }
-      } catch (err) {
-        console.error('[PhoneAudioRecorder] Error processing audio data:', err);
-      }
-    };
-
-    // Store handler ref and register listener
-    dataHandlerRef.current = dataHandler;
-    AudioRecord.on('data', dataHandler);
-
-    console.log('[PhoneAudioRecorder] Audio recorder initialized with new listener');
-  }, [setStateSafe]);
-
-  // Start recording
-  const startRecording = useCallback(async (onAudioData: (pcmBuffer: Uint8Array) => void): Promise<void> => {
-    if (isRecording) {
-      console.log('[PhoneAudioRecorder] Already recording, stopping first...');
-      await stopRecording();
-    }
-
-    setStateSafe(setIsInitializing, true);
-    setStateSafe(setError, null);
-    onAudioDataRef.current = onAudioData;
-
+  const stopRecording = useCallback(async () => {
     try {
-      const hasPermission = await requestPermissions();
-      if (!hasPermission) {
-        throw new Error('Microphone permission denied');
-      }
-
-      console.log('[PhoneAudioRecorder] Starting audio recording...');
-
-      // Configure iOS audio session for background recording
-      // This keeps the audio pipeline active when screen locks
-      try {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: true,
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: true, // ⭐ Critical for background audio
-          interruptionModeIOS: 2, // DoNotMix
-          shouldDuckAndroid: false,
-          playThroughEarpieceAndroid: false,
-        });
-        console.log('[PhoneAudioRecorder] ✅ Audio session configured for background recording');
-      } catch (audioModeError) {
-        console.warn('[PhoneAudioRecorder] ⚠️ Failed to set audio mode:', audioModeError);
-        // Continue anyway - audio recording might still work
-      }
-
-      // Clear partial chunk buffer from previous session
-      partialChunkBuffer.current = new Uint8Array(0);
-
-      // Initialize recorder with callback
-      initializeRecorder();
-
-      // Start recording
-      AudioRecord.start();
-
-      setStateSafe(setIsRecording, true);
-      setStateSafe(setIsInitializing, false);
-
-      // Start interval to sync ref audioLevel to state (updates React components)
-      audioLevelIntervalRef.current = setInterval(() => {
-        setAudioLevel(audioLevelRef.current);
-      }, 50); // Update state 20 times per second
-
-      console.log('[PhoneAudioRecorder] Recording started successfully - streaming real PCM audio data');
-    } catch (err) {
-      const errorMessage = (err as Error).message || 'Failed to start recording';
-      console.error('[PhoneAudioRecorder] Start recording error:', errorMessage);
-      setStateSafe(setError, errorMessage);
-      setStateSafe(setIsInitializing, false);
-      onAudioDataRef.current = null;
-      throw new Error(errorMessage);
+      await stopVoiceSession();
+    } catch (cause) {
+      console.warn('[PhoneAudioRecorder] stopVoiceSession failed:', cause);
+    } finally {
+      clearCapture();
     }
-  }, [isRecording, requestPermissions, initializeRecorder, setStateSafe]);
+  }, [clearCapture]);
 
-  // Stop recording
-  const stopRecording = useCallback(async (): Promise<void> => {
-    console.log('[PhoneAudioRecorder] Stopping recording...');
-
-    // Stop audio level sync interval
-    if (audioLevelIntervalRef.current) {
-      clearInterval(audioLevelIntervalRef.current);
-      audioLevelIntervalRef.current = null;
+  const startRecording = useCallback(async (
+    onFrame: (frame: CapturedOpusFrame) => void,
+  ): Promise<PhoneCaptureSession> => {
+    if (subscriptionRef.current) await stopRecording();
+    if (mountedRef.current) {
+      setIsInitializing(true);
+      setError(null);
     }
-
-    onAudioDataRef.current = null;
-    audioLevelRef.current = 0;
-    partialChunkBuffer.current = new Uint8Array(0); // Clear partial chunk buffer
-    setStateSafe(setAudioLevel, 0);
-
-    if (!isRecording) {
-      console.log('[PhoneAudioRecorder] No active recording');
-      setStateSafe(setIsRecording, false);
-      setStateSafe(setIsInitializing, false);
-      return;
-    }
-
     try {
-      // Stop recording
-      await AudioRecord.stop();
-      console.log('[PhoneAudioRecorder] Recording stopped');
+      if (!(await requestMicPermission())) throw new Error('Microphone permission denied');
 
-      // Deactivate audio session to allow iOS to suspend app if needed
-      // (unless other audio is active)
-      try {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          staysActiveInBackground: false,
-        });
-        console.log('[PhoneAudioRecorder] Audio session deactivated');
-      } catch (audioModeError) {
-        console.warn('[PhoneAudioRecorder] Failed to deactivate audio session:', audioModeError);
-      }
-    } catch (err) {
-      console.error('[PhoneAudioRecorder] Stop recording error:', err);
-      setStateSafe(setError, 'Failed to stop recording');
-    }
-
-    setStateSafe(setIsRecording, false);
-    setStateSafe(setIsInitializing, false);
-  }, [isRecording, setStateSafe]);
-
-  // Cleanup on unmount ONLY (empty deps = runs once, cleanup on unmount)
-  useEffect(() => {
-    return () => {
-      console.log('[PhoneAudioRecorder] Component unmounting, cleaning up...');
-      mountedRef.current = false;
-
-      if (audioLevelIntervalRef.current) {
-        clearInterval(audioLevelIntervalRef.current);
-        audioLevelIntervalRef.current = null;
-      }
-
-      // Remove audio data listener
-      if (dataHandlerRef.current) {
+      const captureEpoch = captureEpochRef.current + 1;
+      captureEpochRef.current = captureEpoch;
+      let frameCount = 0;
+      subscriptionRef.current = addOpusFrameListener((native) => {
+        if (!mountedRef.current || native.captureEpoch !== captureEpochRef.current) return;
+        let frame: CapturedOpusFrame;
         try {
-          AudioRecord.removeListener('data', dataHandlerRef.current);
-        } catch (e) {
-          // removeListener might not exist on all versions
-          console.log('[PhoneAudioRecorder] Note: removeListener not available');
+          frame = capturedOpusFrameFromNative(native, decodeBase64);
+        } catch (cause) {
+          console.warn('[PhoneAudioRecorder] Dropped invalid native frame:', cause);
+          return;
         }
-        dataHandlerRef.current = null;
-      }
+        frameCount += 1;
+        if (frameCount === 1) {
+          if (firstFrameTimeoutRef.current) clearTimeout(firstFrameTimeoutRef.current);
+          firstFrameTimeoutRef.current = null;
+          setError(null);
+        }
+        const level = Math.min(1, Math.max(0, native.audioLevel || 0)) * 100;
+        setAudioLevel(previous => (previous === 0 ? level : previous * 0.65 + level * 0.35));
+        onFrame(frame);
+      });
 
-      // Stop recording if active (react-native-audio-record is global)
-      try {
-        AudioRecord.stop();
-      } catch (e) {
-        // Ignore if not recording
-      }
-    };
-  }, []); // Empty deps = cleanup only on unmount
+      const capabilities = await startVoiceSession({ captureEpoch });
+      console.log('[PhoneAudioRecorder] Native Opus capture started:', capabilities.mode, capabilities.input_route);
+      firstFrameTimeoutRef.current = setTimeout(() => {
+        if (mountedRef.current) setError('Microphone started, but no audio frames arrived.');
+      }, FIRST_FRAME_TIMEOUT_MS);
 
-  return {
-    isRecording,
-    isInitializing,
-    error,
-    audioLevel,
-    startRecording,
-    stopRecording,
-  };
+      if (mountedRef.current) {
+        setIsRecording(true);
+        setIsInitializing(false);
+      }
+      return { captureEpoch, capabilities };
+    } catch (cause) {
+      clearCapture();
+      const message = cause instanceof Error ? cause.message : 'Failed to start recording';
+      console.error('[PhoneAudioRecorder] Start recording error:', message);
+      if (mountedRef.current) setError(message);
+      throw cause instanceof Error ? cause : new Error(message);
+    }
+  }, [clearCapture, stopRecording]);
+
+  useEffect(() => () => {
+    mountedRef.current = false;
+    subscriptionRef.current?.remove();
+    subscriptionRef.current = null;
+    if (firstFrameTimeoutRef.current) clearTimeout(firstFrameTimeoutRef.current);
+    stopVoiceSession().catch(() => undefined);
+  }, []);
+
+  return { isRecording, isInitializing, error, audioLevel, startRecording, stopRecording };
 };

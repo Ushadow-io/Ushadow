@@ -376,9 +376,8 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     try {
       const { getAvailableAudioDestinations } = await import('../../services/audioProviderApi');
 
-      // Determine audio format based on source type
-      // Phone microphone sends PCM (16-bit), OMI device sends Opus frames
-      const audioFormat = selectedSource.type === 'microphone' ? 'pcm' : 'opus';
+      // Both sources send Opus: the phone mic encodes it natively, OMI sends Opus frames.
+      const audioFormat = 'opus';
       console.log(`[UnifiedStreaming] Querying audio destinations for format: ${audioFormat}...`);
 
       const destinations = await getAvailableAudioDestinations(
@@ -432,7 +431,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       // Mobile can't connect directly to internal Docker container names like "chronicle:5001"
       // The relay handles forwarding to internal services
       const streamUrl = buildRelayUrl(selectedUNode.apiUrl, authToken, selectedDestinations, audioSource);
-      console.log('[UnifiedStreaming] Built relay URL for', selectedDestinations.length, 'destination(s) with codec:', audioSource === 'mic' ? 'pcm' : 'opus', streamUrl);
+      console.log('[UnifiedStreaming] Built relay URL for', selectedDestinations.length, 'destination(s), source:', audioSource);
 
       return streamUrl;
     } catch (err) {
@@ -512,16 +511,16 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         ? { type: 'omi', deviceId: selectedSource.deviceId, deviceName: selectedSource.deviceName }
         : { type: 'microphone' };
 
-      const codec = selectedSource.type === 'microphone' ? 'pcm' : 'opus';
-      const sessionId = await onSessionStart(sessionSource, codec);
+      // Both sources stream Opus: Chronicle audio v2 accepts nothing else.
+      const sessionId = await onSessionStart(sessionSource, 'opus');
       currentSessionIdRef.current = sessionId;
       console.log('[UnifiedStreaming] Session started:', sessionId);
     }
 
     try {
       if (selectedSource.type === 'microphone') {
-        // Phone microphone uses PCM
-        await phoneStreaming.startStreaming(streamUrl, 'streaming', 'pcm');
+        // Phone microphone: native on-device Opus encoding
+        await phoneStreaming.startStreaming(streamUrl, 'streaming', 'opus');
       } else {
         // OMI streaming
         if (!connectedDeviceId || connectedDeviceId !== selectedSource.deviceId) {

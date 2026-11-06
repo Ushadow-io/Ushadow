@@ -203,9 +203,8 @@ export async function getAvailableAudioDestinations(
  * Build relay WebSocket URL with multiple destinations.
  * Connects to relay endpoint which fans out to all selected destinations.
  *
- * Adds codec parameter to destination URLs based on audio source:
- * - mic (device microphone) → ?codec=pcm
- * - omi (hardware device) → ?codec=opus
+ * Adds ?codec=opus to destination URLs. Both the phone mic (native
+ * on-device encoder) and OMI devices stream raw Opus.
  */
 export function buildRelayUrl(
   baseUrl: string,
@@ -216,15 +215,18 @@ export function buildRelayUrl(
   // Convert http(s) to ws(s)
   const wsBaseUrl = baseUrl.replace(/^http/, 'ws');
 
-  // Determine codec based on audio source
-  const codec = audioSource === 'omi' ? 'opus' : 'pcm';
+  // Chronicle audio v2 is Opus-only; the phone mic encodes Opus natively.
+  const codec = 'opus';
+  void audioSource;
 
   // Build destinations array for relay - add codec parameter if not present
+  // The relay uses `protocol` to find the chronicle.audio.v2 destination; the
+  // others (Mycelia) still get Wyoming and need the codec parameter.
   const destinations = selectedDestinations.map(dest => {
+    const protocol = dest.metadata?.protocol;
     let destUrl = dest.url;
 
-    // Add codec parameter if the URL doesn't already have it
-    if (!destUrl.includes('codec=')) {
+    if (protocol !== 'chronicle.audio.v2' && !destUrl.includes('codec=')) {
       const separator = destUrl.includes('?') ? '&' : '?';
       destUrl = `${destUrl}${separator}codec=${codec}`;
     }
@@ -232,6 +234,7 @@ export function buildRelayUrl(
     return {
       name: dest.instance_name,
       url: destUrl,
+      protocol,
     };
   });
 
