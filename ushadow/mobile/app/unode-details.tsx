@@ -383,7 +383,7 @@ export default function UNodeDetailsPage() {
         hostname: info.hostname || node.hostname,
         apiUrl: baseApiUrl,
         chronicleApiUrl: info.chronicle_api_url,
-        streamUrl: info.ws_pcm_url,
+        streamUrl: info.audio_relay_url ?? '',
         tailscaleIp: info.tailscale_ip || node.tailscaleIp,
       });
 

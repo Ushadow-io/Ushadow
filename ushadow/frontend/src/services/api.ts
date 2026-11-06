@@ -636,8 +636,7 @@ export const clusterApi = {
       available_disk_gb: number
     }
     api_port: number
-    ws_pcm_url: string
-    ws_omi_url: string
+    audio_relay_url?: string
     unodes: Array<{
       id: string
       hostname: string

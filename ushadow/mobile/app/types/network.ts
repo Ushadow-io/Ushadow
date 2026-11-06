@@ -50,9 +50,8 @@ export interface LeaderInfo {
   ushadow_api_url: string;
   chronicle_api_url?: string;
   auth_url?: string;  // Authentication URL (e.g., "http://hostname:8082")
-  // WebSocket streaming URLs
-  ws_pcm_url: string;
-  ws_omi_url: string;
+  // Audio v2 relay URL (phone mic and OMI)
+  audio_relay_url?: string;
   unodes: UNode[];
   services: ServiceDeployment[];
 }
@@ -65,9 +64,7 @@ export interface DiscoveredLeader {
   tailscaleIp: string;
   apiUrl: string;
   chronicleApiUrl?: string;  // Chronicle/OMI backend API URL (different port)
-  streamUrl: string;  // Kept for backwards compatibility
-  wsPcmUrl: string;   // WebSocket URL for PCM audio streaming
-  wsOmiUrl: string;   // WebSocket URL for OMI format streaming
+  streamUrl: string;  // Audio v2 relay URL
   role: 'leader';
   capabilities?: LeaderCapabilities;
   // Full leader info (fetched separately)

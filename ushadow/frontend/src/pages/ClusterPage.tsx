@@ -94,8 +94,7 @@ interface LeaderInfo {
     available_disk_gb: number
   }
   api_port: number
-  ws_pcm_url: string
-  ws_omi_url: string
+  audio_relay_url?: string
   unodes: Array<{
     id: string
     hostname: string
@@ -1737,27 +1736,19 @@ export default function ClusterPage() {
               <div className="space-y-2">
                 <div className="flex items-center justify-between bg-neutral-100 dark:bg-neutral-700 rounded-lg p-3">
                   <div>
-                    <p className="text-xs text-neutral-500 dark:text-neutral-400">PCM Audio Stream</p>
-                    <p className="font-mono text-sm text-neutral-900 dark:text-neutral-100 break-all">{leaderInfo.ws_pcm_url}</p>
+                    <p className="text-xs text-neutral-500 dark:text-neutral-400">Audio Relay (Chronicle audio v2)</p>
+                    <p className="font-mono text-sm text-neutral-900 dark:text-neutral-100 break-all" data-testid="cluster-audio-relay-url">{leaderInfo.audio_relay_url ?? 'Not available'}</p>
                   </div>
-                  <button
-                    onClick={() => copyToClipboard(leaderInfo.ws_pcm_url, 'ws_pcm')}
-                    className="p-2 text-neutral-500 hover:text-primary-600 rounded"
-                  >
-                    {copied === 'ws_pcm' ? <Check className="h-4 w-4 text-success-500" /> : <Copy className="h-4 w-4" />}
-                  </button>
-                </div>
-                <div className="flex items-center justify-between bg-neutral-100 dark:bg-neutral-700 rounded-lg p-3">
-                  <div>
-                    <p className="text-xs text-neutral-500 dark:text-neutral-400">OMI Format Stream</p>
-                    <p className="font-mono text-sm text-neutral-900 dark:text-neutral-100 break-all">{leaderInfo.ws_omi_url}</p>
-                  </div>
-                  <button
-                    onClick={() => copyToClipboard(leaderInfo.ws_omi_url, 'ws_omi')}
-                    className="p-2 text-neutral-500 hover:text-primary-600 rounded"
-                  >
-                    {copied === 'ws_omi' ? <Check className="h-4 w-4 text-success-500" /> : <Copy className="h-4 w-4" />}
-                  </button>
+                  {leaderInfo.audio_relay_url && (
+                    <button
+                      onClick={() => copyToClipboard(leaderInfo.audio_relay_url!, 'audio_relay')}
+                      className="p-2 text-neutral-500 hover:text-primary-600 rounded"
+                      data-testid="cluster-copy-audio-relay-url"
+                      aria-label="Copy audio relay URL"
+                    >
+                      {copied === 'audio_relay' ? <Check className="h-4 w-4 text-success-500" /> : <Copy className="h-4 w-4" />}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

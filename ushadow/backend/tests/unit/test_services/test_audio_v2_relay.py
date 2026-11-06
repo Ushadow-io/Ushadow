@@ -109,9 +109,6 @@ def client(monkeypatch, servers):
 
     monkeypatch.setattr(relay, "get_user_from_token", fake_user)
     monkeypatch.setattr(relay, "generate_jwt_for_service", lambda *_, **__: SERVICE_TOKEN)
-    # The old Wyoming path in the router does the same checks.
-    monkeypatch.setattr(audio_relay, "get_user_from_token", fake_user)
-    monkeypatch.setattr(audio_relay, "generate_jwt_for_service", lambda *_, **__: SERVICE_TOKEN)
     monkeypatch.setattr(audio_relay, "_exposed_audio_urls", fake_allowed)
     app = FastAPI()
     app.include_router(audio_relay.router)
@@ -222,39 +219,12 @@ def test_unknown_destination_is_refused_before_any_connect(servers, client):
     assert servers["chronicle"] == []
 
 
-# --- Old Wyoming passthrough path (clients without the v2 subprotocol) ---
-
-
-def _wyoming_url(state, token: str, url: str | None = None) -> str:
-    url = url or f"ws://127.0.0.1:{state['mycelia_port']}/ws/audio"
-    destinations = [{"name": "mycelia", "url": url}]
-    return f"/ws/audio/relay?destinations={quote(json.dumps(destinations))}&token={token}"
-
-
-def test_wyoming_relays_with_service_token(servers, client):
-    with client.websocket_connect(_wyoming_url(servers, "casdoor-token")) as phone:
-        assert phone.receive_json()["type"] == "relay_status"
-        phone.send_text('{"type": "audio-start", "payload_length": null}\n')
-        phone.close()
-        time.sleep(0.3)
-    _wait_for(lambda: len(servers["mycelia"]) >= 1)
-    assert f"token={SERVICE_TOKEN}" in servers["mycelia_paths"][0]
-    assert "audio-start" in servers["mycelia"][0]
-
-
-def test_wyoming_bad_token_closes_with_1008(servers, client):
+def test_client_without_v2_subprotocol_is_refused(servers, client):
+    destinations = quote(json.dumps([{"name": "mycelia", "url": "ws://x/ws/audio"}]))
     with (
-        client.websocket_connect(_wyoming_url(servers, "bad")) as phone,
+        client.websocket_connect(f"/ws/audio/relay?destinations={destinations}") as phone,
         pytest.raises(WebSocketDisconnect) as closed,
     ):
-        phone.receive_json()
-    assert closed.value.code == 1008
+        phone.receive_text()
+    assert closed.value.code == 1002
     assert servers["mycelia_paths"] == []
-
-
-def test_wyoming_unknown_destination_is_refused(servers, client):
-    url = _wyoming_url(servers, "casdoor-token", "ws://attacker.example:8000/ws/audio")
-    with client.websocket_connect(url) as phone, pytest.raises(WebSocketDisconnect) as closed:
-        phone.receive_json()
-    assert closed.value.code == 1008
-    assert "not allowed" in closed.value.reason

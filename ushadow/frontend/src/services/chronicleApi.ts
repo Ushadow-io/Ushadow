@@ -164,7 +164,7 @@ export async function getChronicleProxyUrl(): Promise<string> {
 
 /**
  * Get the direct URL for WebSocket/streaming connections.
- * Use this for ws_pcm and other real-time streaming.
+ * Use this for real-time streaming (audio itself goes through /ws/audio/relay).
  */
 export async function getChronicleDirectUrl(): Promise<string> {
   const info = await getChronicleConnectionInfo()

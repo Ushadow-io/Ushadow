@@ -365,9 +365,7 @@ class ServiceDeployment(BaseModel):
     internal_port: Optional[int] = None  # Container's internal port
     external_url: Optional[str] = None  # e.g., "https://pink.spangled-kettle.ts.net/chronicle"
     internal_url: Optional[str] = None  # e.g., "http://ushadow-pink-chronicle-backend:8000"
-    # Legacy WebSocket URLs (for chronicle service)
-    ws_pcm_url: Optional[str] = None  # WebSocket for PCM audio streaming
-    ws_omi_url: Optional[str] = None  # WebSocket for OMI format streaming
+    audio_relay_url: Optional[str] = None  # Audio v2 relay (chronicle-backend only)
 
 
 class LeaderInfoResponse(BaseModel):
@@ -375,7 +373,7 @@ class LeaderInfoResponse(BaseModel):
 
     This endpoint returns everything the mobile app needs after connecting:
     - Leader node details and capabilities
-    - WebSocket streaming URLs for audio
+    - The audio relay URL (Chronicle audio v2)
     - All unodes in the cluster
     - Services deployed across the cluster
     """
@@ -393,9 +391,8 @@ class LeaderInfoResponse(BaseModel):
     chronicle_api_url: Optional[str] = None  # Chronicle/OMI backend API (if running)
     auth_url: Optional[str] = None  # Casdoor auth provider URL (for mobile app)
 
-    # Streaming URLs (only available when Chronicle service is running)
-    ws_pcm_url: Optional[str] = None  # WebSocket for PCM audio streaming
-    ws_omi_url: Optional[str] = None  # WebSocket for OMI format streaming
+    # Audio v2 relay URL (phone mic and OMI both stream here)
+    audio_relay_url: Optional[str] = None
 
     # Cluster info
     unodes: List[UNode]  # Physical/virtual nodes in the cluster
@@ -444,12 +441,10 @@ async def _get_leader_info_docker() -> LeaderInfoResponse:
     compose_registry = get_compose_registry()
 
     chronicle_api_url = None
-    ws_pcm_url = None
-    ws_omi_url = None
+    audio_relay_url = None
     if tailscale_hostname:
         chronicle_api_url = f"https://{tailscale_hostname}/api/services/chronicle-backend/proxy"
-        ws_pcm_url = f"wss://{tailscale_hostname}/ws/audio/relay"
-        ws_omi_url = f"wss://{tailscale_hostname}/ws/audio/relay"
+        audio_relay_url = f"wss://{tailscale_hostname}/ws/audio/relay"
 
     services: List[ServiceDeployment] = []
     for unode in unodes:
@@ -476,11 +471,9 @@ async def _get_leader_info_docker() -> LeaderInfoResponse:
                 if route_path and tailscale_hostname:
                     external_url = f"https://{tailscale_hostname}{route_path}"
 
-            service_ws_pcm_url = None
-            service_ws_omi_url = None
-            if service_name == "chronicle-backend" and tailscale_hostname:
-                service_ws_pcm_url = f"wss://{tailscale_hostname}/ws/audio/relay"
-                service_ws_omi_url = f"wss://{tailscale_hostname}/ws/audio/relay"
+            service_relay_url = None
+            if service_name == "chronicle-backend":
+                service_relay_url = audio_relay_url
 
             services.append(ServiceDeployment(
                 name=service_name,
@@ -491,8 +484,7 @@ async def _get_leader_info_docker() -> LeaderInfoResponse:
                 internal_port=internal_port,
                 external_url=external_url,
                 internal_url=internal_url,
-                ws_pcm_url=service_ws_pcm_url,
-                ws_omi_url=service_ws_omi_url,
+                audio_relay_url=service_relay_url,
             ))
 
     # Casdoor URL for mobile devices — use Tailscale HTTPS if available, else local port
@@ -512,8 +504,7 @@ async def _get_leader_info_docker() -> LeaderInfoResponse:
         ushadow_api_url=ushadow_api_url,
         chronicle_api_url=chronicle_api_url,
         auth_url=auth_url,
-        ws_pcm_url=ws_pcm_url,
-        ws_omi_url=ws_omi_url,
+        audio_relay_url=audio_relay_url,
         unodes=unodes,
         services=services,
     )
@@ -567,8 +558,7 @@ async def _get_leader_info_k8s() -> LeaderInfoResponse:
         ushadow_api_url=base_url,
         chronicle_api_url=f"{base_url}/api/services/chronicle-backend/proxy",
         keycloak_url=keycloak_url,
-        ws_pcm_url=f"wss://{ingress_host}/ws/audio/relay",
-        ws_omi_url=f"wss://{ingress_host}/ws/audio/relay",
+        audio_relay_url=f"wss://{ingress_host}/ws/audio/relay",
         unodes=[unode] if unode else [],
         services=[],  # TODO: list K8s deployed services
     )

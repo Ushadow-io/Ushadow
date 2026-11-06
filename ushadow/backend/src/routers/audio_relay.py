@@ -1,381 +1,41 @@
 """
-Audio Relay Router - WebSocket relay to multiple destinations
+Audio Relay Router - one Chronicle audio v2 connection, many destinations.
 
-Accepts Wyoming protocol audio from mobile app and forwards to:
-- Chronicle (/ws?codec=pcm)
-- Mycelia (/ws?codec=pcm)
-- Any other configured endpoints
-
-Mobile connects once to /ws/audio/relay, server handles fanout.
+Clients (phone mic, OMI via the phone, web) connect once to /ws/audio/relay with
+the chronicle.audio.v2 subprotocol. The relay passes v2 through to Chronicle and
+unwraps the Opus packets as Wyoming for other destinations (Mycelia). See
+services/audio_v2/relay.py.
 """
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException
-from typing import List, Dict, Optional
-import asyncio
 import json
 import logging
-from datetime import datetime
+
+from fastapi import APIRouter, WebSocket
 
 from ..services.audio_v2 import SUBPROTOCOL as V2_SUBPROTOCOL
 from ..services.audio_v2 import run_v2_relay
-from ..services.audio_v2.relay import RelayRefusedError, check_allowed
-from ..services.auth import generate_jwt_for_service, get_current_user, get_user_from_token
 
 router = APIRouter(prefix="/ws/audio", tags=["audio"])
 logger = logging.getLogger(__name__)
 
 
-class AudioRelayConnection:
-    """Manages a single relay destination connection"""
-
-    def __init__(self, name: str, url: str, token: str):
-        self.name = name
-        self.url = url
-        self.token = token
-        self.ws: Optional[WebSocket] = None
-        self.connected = False
-        self.error_count = 0
-        self.max_errors = 5
-
-    async def connect(self):
-        """Connect to the destination WebSocket"""
-        try:
-            import websockets
-
-            # Add token to URL (use & if URL already has query params)
-            separator = "&" if "?" in self.url else "?"
-            url_with_token = f"{self.url}{separator}token={self.token}"
-
-            codec = "pcm"
-            if "codec=opus" in self.url:
-                codec = "opus"
-            logger.info(f"[AudioRelay:{self.name}] Connecting to {self.url} [codec={codec}]")
-
-            # Disable client-side keepalive pings: we send audio every ~250ms so a dead
-            # connection is detected immediately on the next send. Pings are redundant here
-            # and can cause timeout false-positives when the server is busy flushing frames.
-            self.ws = await websockets.connect(url_with_token, ping_interval=None)
-            self.connected = True
-            self.error_count = 0
-            logger.info(f"[AudioRelay:{self.name}] Connected")
-
-        except Exception as e:
-            logger.error(f"[AudioRelay:{self.name}] Connection failed: {e}")
-            self.connected = False
-            raise
-
-    async def send_text(self, message: str):
-        """Send text message to destination"""
-        if not self.connected or not self.ws:
-            return
-
-        try:
-            await self.ws.send(message)
-        except Exception as e:
-            self.error_count += 1
-            logger.error(f"[AudioRelay:{self.name}] Send text error ({self.error_count}/{self.max_errors}): {e}")
-
-            if self.error_count >= self.max_errors:
-                logger.warning(f"[AudioRelay:{self.name}] Too many errors, disconnecting")
-                await self.disconnect()
-
-    async def send_binary(self, data: bytes):
-        """Send binary data to destination"""
-        if not self.connected or not self.ws:
-            return
-
-        try:
-            await self.ws.send(data)
-        except Exception as e:
-            self.error_count += 1
-            logger.error(f"[AudioRelay:{self.name}] Send binary error ({self.error_count}/{self.max_errors}): {e}")
-
-            if self.error_count >= self.max_errors:
-                logger.warning(f"[AudioRelay:{self.name}] Too many errors, disconnecting")
-                await self.disconnect()
-
-    async def disconnect(self):
-        """Disconnect from destination"""
-        if self.ws:
-            try:
-                await self.ws.close()
-            except:
-                pass
-        self.connected = False
-        self.ws = None
-        logger.info(f"[AudioRelay:{self.name}] Disconnected")
-
-    async def start_receive_loop(self, client_ws: WebSocket) -> None:
-        """Drain messages from destination and forward to client.
-
-        Without this loop, unread messages from the destination (e.g. Deepgram
-        interim transcripts) fill the TCP receive buffer. Once full, the
-        destination's send() blocks and its event loop stalls, causing the
-        connection to drop with 'no close frame received or sent'.
-        """
-        if not self.connected or not self.ws:
-            return
-        try:
-            async for raw_message in self.ws:
-                if not isinstance(raw_message, str):
-                    continue
-                try:
-                    data = json.loads(raw_message)
-                    data["source"] = self.name
-                    await client_ws.send_json(data)
-                except json.JSONDecodeError:
-                    pass
-                except Exception as e:
-                    logger.debug(f"[AudioRelay:{self.name}] Forward error: {e}")
-        except Exception as e:
-            if self.connected:
-                logger.debug(f"[AudioRelay:{self.name}] Receive loop ended: {e}")
-
-
-class AudioRelaySession:
-    """Manages a relay session with multiple destinations"""
-
-    def __init__(self, destinations: List[Dict[str, str]], token: str):
-        self.destinations: List[AudioRelayConnection] = [
-            AudioRelayConnection(
-                name=dest["name"],
-                url=dest["url"],
-                token=token
-            )
-            for dest in destinations
-        ]
-        self.bytes_relayed = 0
-        self.chunks_relayed = 0
-
-    async def connect_all(self):
-        """Connect to all destinations"""
-        results = await asyncio.gather(
-            *[dest.connect() for dest in self.destinations],
-            return_exceptions=True
-        )
-
-        # Log connection results
-        for dest, result in zip(self.destinations, results):
-            if isinstance(result, Exception):
-                logger.error(f"[AudioRelay:{dest.name}] Failed to connect: {result}")
-
-        # Return number of successful connections
-        connected = sum(1 for dest in self.destinations if dest.connected)
-        logger.info(f"[AudioRelay] Connected to {connected}/{len(self.destinations)} destinations")
-        return connected
-
-    async def relay_text(self, message: str):
-        """Relay text message to all connected destinations"""
-        await asyncio.gather(
-            *[dest.send_text(message) for dest in self.destinations if dest.connected],
-            return_exceptions=True
-        )
-
-    async def relay_binary(self, data: bytes):
-        """Relay binary data to all connected destinations"""
-        self.bytes_relayed += len(data)
-        self.chunks_relayed += 1
-
-        if self.chunks_relayed % 50 == 0:
-            logger.info(f"[AudioRelay] Relayed {self.chunks_relayed} chunks, {self.bytes_relayed} bytes")
-
-        await asyncio.gather(
-            *[dest.send_binary(data) for dest in self.destinations if dest.connected],
-            return_exceptions=True
-        )
-
-    async def disconnect_all(self):
-        """Disconnect from all destinations"""
-        await asyncio.gather(
-            *[dest.disconnect() for dest in self.destinations],
-            return_exceptions=True
-        )
-        logger.info(f"[AudioRelay] Session ended. Total: {self.chunks_relayed} chunks, {self.bytes_relayed} bytes")
-
-    def get_status(self) -> Dict:
-        """Get current relay status"""
-        return {
-            "destinations": [
-                {
-                    "name": dest.name,
-                    "connected": dest.connected,
-                    "errors": dest.error_count,
-                }
-                for dest in self.destinations
-            ],
-            "bytes_relayed": self.bytes_relayed,
-            "chunks_relayed": self.chunks_relayed,
-        }
-
-
 @router.websocket("/relay")
-async def audio_relay_websocket(
-    websocket: WebSocket,
-    # TODO: Implement your auth - this is a placeholder
-    # user = Depends(get_current_user)
-):
+async def audio_relay_websocket(websocket: WebSocket):
     """
-    Audio relay WebSocket endpoint.
+    Audio v2 relay WebSocket endpoint.
+
+    Subprotocol: chronicle.audio.v2 (required). The login token travels in the
+    v2 ClientHello, not in the URL.
 
     Query parameters:
-    - destinations: JSON array of {"name": "chronicle", "url": "ws://host/ws?codec=pcm"}
-    - token: JWT token for authenticating to destinations
-
-    Example:
-    ws://localhost:8000/ws/audio/relay?destinations=[{"name":"chronicle","url":"ws://host/ws?codec=pcm"},{"name":"mycelia","url":"ws://host/ws?codec=pcm"}]&token=YOUR_JWT
-
-    Clients that request the chronicle.audio.v2 subprotocol get the v2 relay
-    (see services/audio_v2/relay.py) instead of the Wyoming passthrough.
+    - destinations: JSON array of {"name", "url", "protocol"?}. Exactly one must
+      have protocol "chronicle.audio.v2"; each url must be an audio_intake URL
+      this server exposes.
     """
-    if V2_SUBPROTOCOL in websocket.scope.get("subprotocols", []):
-        await _audio_relay_v2(websocket)
+    if V2_SUBPROTOCOL not in websocket.scope.get("subprotocols", []):
+        await websocket.accept()
+        await websocket.close(code=1002, reason=f"subprotocol {V2_SUBPROTOCOL} is required")
         return
 
-    await websocket.accept()
-    logger.info("[AudioRelay] Client connected")
-
-    # Parse destinations from query params
-    try:
-        destinations_param = websocket.query_params.get("destinations")
-        token = websocket.query_params.get("token")
-        codec = websocket.query_params.get("codec", "pcm")  # Default to PCM if not specified
-
-        if not destinations_param or not token:
-            await websocket.close(code=1008, reason="Missing destinations or token parameter")
-            return
-
-        destinations = json.loads(destinations_param)
-        if not isinstance(destinations, list) or len(destinations) == 0:
-            await websocket.close(code=1008, reason="destinations must be a non-empty array")
-            return
-
-        # Add codec parameter to destination URLs if not already present
-        for dest in destinations:
-            if "codec=" not in dest['url']:
-                separator = "&" if "?" in dest['url'] else "?"
-                dest['url'] = f"{dest['url']}{separator}codec={codec}"
-
-        logger.info(f"[AudioRelay] Destinations: {[d['name'] for d in destinations]}")
-        logger.info(f"[AudioRelay] Using codec: {codec}")
-
-        # Log destination URLs received from client
-        for dest in destinations:
-            logger.info(f"[AudioRelay] Client requested: {dest['name']} -> {dest['url']}")
-
-    except json.JSONDecodeError as e:
-        await websocket.close(code=1008, reason=f"Invalid destinations JSON: {e}")
-        return
-    except Exception as e:
-        await websocket.close(code=1011, reason=f"Error parsing parameters: {e}")
-        return
-
-    # Fail closed: only a valid Casdoor user gets a service token, and the relay
-    # connects only to audio URLs this server exposes (no SSRF, no token leak).
-    user = await get_user_from_token(token)
-    if not user:
-        await websocket.close(code=1008, reason="invalid or expired token")
-        return
-    try:
-        check_allowed(destinations, await _exposed_audio_urls())
-    except RelayRefusedError as refused:
-        logger.warning(f"[AudioRelay] Refused: {refused.reason}")
-        await websocket.close(code=refused.code, reason=refused.reason)
-        return
-    service_token = generate_jwt_for_service(
-        str(user.id), user.email, audiences=["ushadow", "chronicle"],
-    )
-
-    # Create relay session
-    session = AudioRelaySession(destinations, service_token)
-    receive_tasks: list = []
-
-    try:
-        # Connect to all destinations
-        connected_count = await session.connect_all()
-
-        if connected_count == 0:
-            await websocket.send_json({
-                "type": "error",
-                "message": "Failed to connect to any destinations"
-            })
-            await websocket.close(code=1011, reason="No destinations available")
-            return
-
-        # Send status to client
-        await websocket.send_json({
-            "type": "relay_status",
-            "data": session.get_status()
-        })
-
-        # Start receive loops for all connected destinations.
-        # Each loop drains incoming messages (e.g. Deepgram interim transcripts)
-        # and forwards them to the client with a 'source' field added.
-        # Without these loops the destination's TCP send buffer fills up,
-        # blocking its event loop and causing the connection to drop.
-        receive_tasks = [
-            asyncio.create_task(dest.start_receive_loop(websocket))
-            for dest in session.destinations
-            if dest.connected
-        ]
-        logger.info(f"[AudioRelay] Started {len(receive_tasks)} receive loop(s)")
-
-        # Relay loop
-        while True:
-            # Receive from mobile client
-            try:
-                message = await websocket.receive()
-            except WebSocketDisconnect:
-                logger.info("[AudioRelay] Client disconnected")
-                break
-            except RuntimeError as e:
-                # Handle "Cannot call receive once a disconnect message has been received"
-                if "disconnect" in str(e).lower():
-                    logger.info("[AudioRelay] Client disconnected (disconnect message received)")
-                    break
-                raise
-
-            # Check for disconnect message type
-            if message.get("type") == "websocket.disconnect":
-                logger.info("[AudioRelay] Client disconnected (disconnect message)")
-                break
-
-            # Relay text messages (Wyoming protocol headers)
-            if "text" in message:
-                text_data = message["text"]
-                logger.debug(f"[AudioRelay] Relaying text: {text_data[:100]}")
-                await session.relay_text(text_data)
-
-            # Relay binary messages (audio chunks)
-            elif "bytes" in message:
-                binary_data = message["bytes"]
-                await session.relay_binary(binary_data)
-
-    except Exception as e:
-        logger.error(f"[AudioRelay] Error: {e}", exc_info=True)
-        try:
-            await websocket.send_json({
-                "type": "error",
-                "message": str(e)
-            })
-        except:
-            pass
-
-    finally:
-        # Cancel receive loops before disconnecting so they don't try to
-        # forward messages on a closing websocket
-        for task in receive_tasks:
-            task.cancel()
-        if receive_tasks:
-            await asyncio.gather(*receive_tasks, return_exceptions=True)
-        # Cleanup
-        await session.disconnect_all()
-        try:
-            await websocket.close()
-        except:
-            pass
-
-
-async def _audio_relay_v2(websocket: WebSocket) -> None:
-    """Chronicle audio v2: the token arrives in the ClientHello, not the URL."""
     await websocket.accept(subprotocol=V2_SUBPROTOCOL)
     try:
         destinations = json.loads(websocket.query_params.get("destinations") or "[]")
@@ -389,7 +49,7 @@ async def _audio_relay_v2(websocket: WebSocket) -> None:
 
 
 async def _exposed_audio_urls() -> set[str]:
-    """Audio intake URLs this server exposes; the v2 relay connects only to these."""
+    """Audio intake URLs this server exposes; the relay connects only to these."""
     # Imported here: routers.deployments imports many services; keep relay import light.
     from .deployments import get_exposed_urls
 
@@ -405,11 +65,10 @@ async def relay_status():
     """Get relay endpoint information"""
     return {
         "endpoint": "/ws/audio/relay",
-        "protocol": "Wyoming",
-        "description": "Multi-destination audio relay",
+        "protocol": V2_SUBPROTOCOL,
+        "description": "Chronicle audio v2 relay; Opus fan-out to Wyoming destinations",
         "parameters": {
-            "destinations": "JSON array of destination configs",
-            "token": "JWT token for destination authentication"
+            "destinations": 'JSON array of {"name", "url", "protocol"?}',
         },
-        "example_url": 'ws://localhost:8000/ws/audio/relay?destinations=[{"name":"chronicle","url":"ws://host/ws?codec=pcm"}]&token=JWT'
+        "auth": "bearer_token in the v2 ClientHello",
     }
