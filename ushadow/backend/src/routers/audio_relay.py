@@ -17,7 +17,8 @@ from datetime import datetime
 
 from ..services.audio_v2 import SUBPROTOCOL as V2_SUBPROTOCOL
 from ..services.audio_v2 import run_v2_relay
-from ..services.auth import get_current_user
+from ..services.audio_v2.relay import RelayRefusedError, check_allowed
+from ..services.auth import generate_jwt_for_service, get_current_user, get_user_from_token
 
 router = APIRouter(prefix="/ws/audio", tags=["audio"])
 logger = logging.getLogger(__name__)
@@ -267,13 +268,21 @@ async def audio_relay_websocket(
         await websocket.close(code=1011, reason=f"Error parsing parameters: {e}")
         return
 
-    # Bridge auth token to service token so Chronicle/Mycelia can validate it
-    # (Chronicle and Mycelia use AUTH_SECRET_KEY HMAC tokens, not Casdoor JWT)
-    from src.services.token_bridge import bridge_to_service_token
-    service_token = await bridge_to_service_token(token, audiences=["ushadow", "chronicle"])
-    if not service_token:
-        await websocket.close(code=1008, reason="Token bridging failed: invalid or expired token")
+    # Fail closed: only a valid Casdoor user gets a service token, and the relay
+    # connects only to audio URLs this server exposes (no SSRF, no token leak).
+    user = await get_user_from_token(token)
+    if not user:
+        await websocket.close(code=1008, reason="invalid or expired token")
         return
+    try:
+        check_allowed(destinations, await _exposed_audio_urls())
+    except RelayRefusedError as refused:
+        logger.warning(f"[AudioRelay] Refused: {refused.reason}")
+        await websocket.close(code=refused.code, reason=refused.reason)
+        return
+    service_token = generate_jwt_for_service(
+        str(user.id), user.email, audiences=["ushadow", "chronicle"],
+    )
 
     # Create relay session
     session = AudioRelaySession(destinations, service_token)
