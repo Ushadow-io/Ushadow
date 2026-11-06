@@ -367,28 +367,6 @@ export const chronicleSystemApi = {
   },
 }
 
-// =============================================================================
-// WebSocket/Streaming - Use direct connection
-// =============================================================================
-
-/**
- * Get WebSocket URL for real-time audio streaming (ws_pcm).
- * This uses direct connection through Tailscale Serve for low latency.
- */
-export async function getChronicleWebSocketUrl(path: string = '/ws_pcm'): Promise<string> {
-  const info = await getChronicleConnectionInfo()
-  if (!info.direct_url) {
-    throw new Error('Chronicle direct URL not available')
-  }
-
-  // Convert HTTP(S) URL to WebSocket URL
-  // direct_url is like "https://red.spangled-kettle.ts.net"
-  const wsUrl = info.direct_url.replace('https:', 'wss:').replace('http:', 'ws:')
-
-  // Append the WebSocket path (configured in Tailscale Serve)
-  return `${wsUrl}${path}`
-}
-
 /**
  * Get audio URL for playback.
  *

@@ -116,14 +116,9 @@ export default function ChronicleRecording({ onAuthRequired, recording }: Chroni
               </option>
             ))}
           </select>
-          {recording.isOmiDevice && (
-            <p className="mt-2 text-sm text-purple-600 dark:text-purple-400">
-              🎤 OMI device detected - using Opus format (/ws_omi)
-            </p>
-          )}
-          {!recording.isOmiDevice && recording.selectedAudioDeviceId && (
-            <p className="mt-2 text-sm text-blue-600 dark:text-blue-400">
-              🎤 Phone microphone - using PCM format (/ws_pcm)
+          {recording.selectedAudioDeviceId && (
+            <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400" data-testid="recording-audio-format">
+              Encoded in the browser as Opus (Chronicle audio v2)
             </p>
           )}
         </div>

@@ -20,6 +20,15 @@ export * from './audio_pb';
 export * from './codec';
 EOF
 
+# Upstream's audio-v2 socket client, unchanged.
+cp "$ROOT/chronicle/app/src/protocol/audioV2Socket.ts" "$DST/../audioV2Socket.ts"
+
+# Web frontend uses the same TypeScript contracts and socket client.
+WEB_DST="$ROOT/ushadow/frontend/src/protocol/audio-v2"
+mkdir -p "$WEB_DST/contracts"
+cp "$DST/audio_pb.ts" "$DST/codec.ts" "$DST/index.ts" "$WEB_DST/contracts/"
+cp "$DST/../audioV2Socket.ts" "$WEB_DST/audioV2Socket.ts"
+
 # Backend relay (ushadow/backend/src/services/audio_v2) uses the Python protobuf.
 PY_SRC="$ROOT/chronicle/backend/src/backend/audio_contract/v2"
 PY_DST="$ROOT/ushadow/backend/src/services/audio_v2"
