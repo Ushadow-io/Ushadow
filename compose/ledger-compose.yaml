@@ -1,0 +1,52 @@
+# Ledger service definition (memory system, milestone M1: evidence + moments)
+# Environment variables are passed directly via docker compose subprocess env.
+# Uses the shared Mongo from docker-compose.infra.yml, which runs as replica set rs0.
+# Design: docs/analysis/memory-system-design.md. Plan: docs/analysis/memory-system-dev-plan.md.
+
+# =============================================================================
+# USHADOW METADATA (ignored by Docker, read by ushadow backend)
+# =============================================================================
+x-ushadow:
+  # Infra services to start before this compose (from docker-compose.infra.yml)
+  infra_services: ["mongo"]
+  ledger:
+    display_name: "Ledger"
+    description: "Append-only evidence ledger: recordings, transcript revisions, gaps, decisions and moments"
+    requires: []
+    tags: ["memory", "ledger", "evidence", "transcripts"]
+
+services:
+  ledger:
+    image: ghcr.io/ushadow-io/u-ledger:dev
+    build:
+      context: ${PROJECT_ROOT:-..}/ledger
+      dockerfile: Dockerfile
+    pull_policy: build
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-ledger
+    ports:
+      - "${LEDGER_PORT:-8200}:8200"
+    environment:
+      # Shared Mongo is a replica set (rs0); keep replicaSet in the URI.
+      - LEDGER_MONGO_URI=${LEDGER_MONGO_URI:-mongodb://mongo:27017/?replicaSet=rs0}
+      - LEDGER_DB=${LEDGER_DB:-ledger}
+      - LEDGER_PORT=8200
+    networks:
+      infra-network:
+        aliases:
+          - ledger  # other containers reach it at http://ledger:8200
+      ushadow-network:
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8200/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+networks:
+  infra-network:
+    name: infra-network
+    external: true
+  ushadow-network:
+    name: ushadow-network
+    external: true

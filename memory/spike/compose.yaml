@@ -1,0 +1,30 @@
+# Throw-away Neo4j for the S1 Graphiti spike ONLY.
+# Own project name, container name, ports and volume, so it cannot collide with
+# the shared Ushadow infra Neo4j (which uses 7474/7687).
+#   docker compose -f memory/spike/compose.yaml up -d
+#   docker compose -f memory/spike/compose.yaml down -v   # delete everything
+name: s1-graphiti-spike
+
+services:
+  neo4j:
+    image: neo4j:5.26.16-community   # Graphiti 0.31.2 README: Neo4j 5.26+
+    container_name: s1-graphiti-spike-neo4j
+    ports:
+      - "127.0.0.1:17474:7474"   # browser
+      - "127.0.0.1:17687:7687"   # bolt
+    environment:
+      NEO4J_AUTH: neo4j/${S1_NEO4J_PASSWORD:-s1-spike-password}
+      NEO4J_server_memory_heap_max__size: 1G
+      NEO4J_server_memory_pagecache_size: 512M
+      NEO4J_dbms_usage__report_enabled: "false"
+    volumes:
+      - s1_graphiti_spike_neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  s1_graphiti_spike_neo4j_data:
+    name: s1_graphiti_spike_neo4j_data

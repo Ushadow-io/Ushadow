@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "2.0.0",
+  "range": {"start": "2026-01-05T00:00:00Z", "end": "2026-01-06T00:00:00Z"},
+  "timezone": "Europe/London",
+  "sources": [
+    {"id": "src-pendant", "kind": "wearable", "modalities": ["audio_input"], "label": "Synthetic pendant"},
+    {"id": "src-phone", "kind": "phone", "modalities": ["audio_input"], "label": "Synthetic phone"}
+  ],
+  "recordings": [
+    {"id": "rec-a", "sourceId": "src-pendant", "range": {"start": "2026-01-05T09:00:00Z", "end": "2026-01-05T09:40:00Z"}, "currentTranscriptRevision": "r2"},
+    {"id": "rec-b", "sourceId": "src-phone", "range": {"start": "2026-01-05T14:00:00Z", "end": "2026-01-05T14:20:00Z"}}
+  ],
+  "transcripts": [
+    {
+      "recordingId": "rec-a", "revision": "r1", "createdAt": "2026-01-05T10:00:00Z", "model": "old-model",
+      "speakers": [{"label": "Speaker 0", "role": "owner"}],
+      "segments": [
+        {"id": "a1-old", "text": "OLD REVISION TEXT MUST NOT BE USED", "speakerLabel": "Speaker 0", "start": "2026-01-05T09:01:00Z", "end": "2026-01-05T09:01:10Z"}
+      ]
+    },
+    {
+      "recordingId": "rec-a", "revision": "r2", "createdAt": "2026-01-05T09:50:00Z", "model": "new-model",
+      "speakers": [
+        {"label": "Speaker 0", "role": "owner"},
+        {"label": "Speaker 1", "role": "participant", "displayName": "Priya"},
+        {"label": "Speaker 2", "role": "media"}
+      ],
+      "segments": [
+        {"id": "a1", "text": "Morning Priya, did you book the venue for the Lisbon offsite?", "speakerLabel": "Speaker 0", "start": "2026-01-05T09:01:00Z", "end": "2026-01-05T09:01:08Z"},
+        {"id": "a2", "text": "Yes, I booked the Alfama hall for the twelfth of February.", "speakerLabel": "Speaker 1", "start": "2026-01-05T09:01:10Z", "end": "2026-01-05T09:01:18Z"},
+        {"id": "a3", "text": "Great. I will send the agenda to the team tomorrow.", "speakerLabel": "Speaker 0", "start": "2026-01-05T09:01:20Z", "end": "2026-01-05T09:01:26Z"},
+        {"id": "a4", "text": "And now the weather for the south coast.", "speakerLabel": "Speaker 2", "start": "2026-01-05T09:05:00Z", "end": "2026-01-05T09:05:04Z"},
+        {"id": "a5", "text": "", "speakerLabel": "Speaker 0", "start": "2026-01-05T09:06:00Z", "end": "2026-01-05T09:06:01Z"},
+        {"id": "a6", "text": "By the way, my brother Tom started at the bakery on Mill Street.", "speakerLabel": "Speaker 1", "start": "2026-01-05T09:21:00Z", "end": "2026-01-05T09:21:07Z"},
+        {"id": "a7", "text": "Oh nice, tell Tom congratulations from me.", "speakerLabel": "Speaker 0", "start": "2026-01-05T09:21:09Z", "end": "2026-01-05T09:21:13Z"}
+      ]
+    },
+    {
+      "recordingId": "rec-b", "revision": "r1", "createdAt": "2026-01-05T14:30:00Z", "model": "new-model",
+      "speakers": [
+        {"label": "Speaker 0", "role": "owner"},
+        {"label": "Speaker 1", "role": "participant", "displayName": "Priya"}
+      ],
+      "segments": [
+        {"id": "b1", "text": "Priya again, the Alfama hall moved us to the thirteenth of February.", "speakerLabel": "Speaker 1", "start": "2026-01-05T14:01:00Z", "end": "2026-01-05T14:01:07Z"},
+        {"id": "b2", "text": "Fine, I will update the agenda.", "speakerLabel": "Speaker 0", "start": "2026-01-05T14:01:09Z", "end": "2026-01-05T14:01:12Z"},
+        {"id": "b3", "text": "Note to self: buy printer ink.", "speakerLabel": "Speaker 0", "start": "2026-01-05T14:10:00Z", "end": "2026-01-05T14:10:03Z"}
+      ]
+    }
+  ],
+  "corrections": []
+}

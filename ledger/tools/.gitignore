@@ -1,0 +1,4 @@
+# Exported golden days contain real speech. Never commit them.
+golden/
+__pycache__/
+.pytest_cache/

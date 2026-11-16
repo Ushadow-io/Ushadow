@@ -1,0 +1,27 @@
+{
+  "date": "2026-01-05",
+  "conversations": [
+    {
+      "id": "conv-2", "revision": 2, "title": "Tom and the offsite date",
+      "range": {"start": "2026-01-05T09:20:00Z", "end": "2026-01-05T14:05:00Z"},
+      "parts": [
+        {"recordingId": "rec-a", "range": {"start": "2026-01-05T09:20:00Z", "end": "2026-01-05T09:40:00Z"}},
+        {"recordingId": "rec-b", "range": {"start": "2026-01-05T14:00:00Z", "end": "2026-01-05T14:05:00Z"}}
+      ]
+    },
+    {
+      "id": "conv-1", "revision": 1, "title": "Offsite venue",
+      "range": {"start": "2026-01-05T09:00:00Z", "end": "2026-01-05T09:15:00Z"},
+      "parts": [
+        {"recordingId": "rec-a", "range": {"start": "2026-01-05T09:00:00Z", "end": "2026-01-05T09:15:00Z"}}
+      ]
+    },
+    {
+      "id": "conv-3", "revision": 1, "title": "Empty (no segments in range)",
+      "range": {"start": "2026-01-05T14:30:00Z", "end": "2026-01-05T14:40:00Z"},
+      "parts": [
+        {"recordingId": "rec-b", "range": {"start": "2026-01-05T14:30:00Z", "end": "2026-01-05T14:40:00Z"}}
+      ]
+    }
+  ]
+}

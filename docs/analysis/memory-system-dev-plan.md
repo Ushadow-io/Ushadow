@@ -43,7 +43,7 @@ Track B (memory):   S1 Graphiti spike ─→ M3 memory service ─────�
 
 | # | Task | Repo |
 |---|---|---|
-| 0.1 | Add the `user_id` filter in `ushadow/backend/src/services/graph_enrichment.py` | Ushadow |
+| 0.1 | Add the `user_id` filter in `openmemory/openmemory/api/app/services/graph_enrichment.py` | openmemory (submodule) |
 | 0.2 | Script: export 3 golden days from Chronicle (recordings, segments, times, speakers) to JSON in the `CaptureBundle` shape | Ushadow `ledger/tools/` |
 | 0.3 | User writes 2-3 test questions for each of G1-G4, with the expected answer (section 8 of the design) | User |
 | 0.4 | Merge `schema-v2` of life-datatypes and tag `v2.0.0` so the packages publish | life-datatypes |
@@ -193,3 +193,21 @@ The two services do not import each other. So each one can move to its own repo 
 3. 1.1 ledger service skeleton + compose file.
 4. 1.3 Chronicle adapter, with the check of times in the events.
 5. S1.1 Graphiti in a throw-away compose file.
+
+## 9. Findings from the first build wave (2026-11-16)
+
+Built on branch `feat/ledger-memory`: ledger core (M1), Chronicle adapter (1.3), golden-day export tool (0.2), Graphiti spike harness (S1). The leak fix (0.1) is on branch `fix/graph-enrichment-user-filter` of the `openmemory` submodule.
+
+| Finding | Effect |
+|---|---|
+| Chronicle events give seconds from the conversation start, not clock time, and no speaker role | The adapter reads the time in-process: `Conversation.audio_ranges`, or `claim_capture_window` for live speech (`chronicle/backend/src/backend/services/audio_claims.py:439`). If the time cannot be proven, it sends nothing |
+| Chronicle sends a live transcript, then processes the audio again at close | Revision `live` is a draft: it can grow and change until a final revision exists. Then it is frozen. This is the one named exception to "evidence is never overwritten" |
+| `Transcript` has no draft/final field; `CaptureBundle` has no owner; `Recording` has no audio pointer; `CaptureGap` has no `recordingId` | Schema gaps. For now: revision id `live`, an ingest envelope `{userId, bundle}`, and a ledger-only `Erasure` record |
+| Graphiti `add_episode(uuid=...)` loads an existing episode | We cannot use our id as the Graphiti id. Keep a map: our episode id ↔ Graphiti id. (The design doc assumed we could.) |
+| Graphiti `search` with no `group_ids` searches all users | The memory port must always pass the user's group |
+| Graphiti telemetry is on by default | Turn it off in the spike and in the service |
+| Graphiti `remove_episode` does not reopen older facts that the episode closed | Our erase must do that step |
+| The leak fix filters on `user_id`, but Chronicle writes all users under one shared id | The leak is closed only for users with their own id. The full fix is the ledger |
+| The root `.gitignore` ignores `tests/` | `ledger/.gitignore` and `memory/.gitignore` turn that rule off |
+
+Not done yet: a real golden-day export, a spike run with a real model, the adapter against a running Chronicle, the adapter and the ledger together over HTTP, the generic proxy check (1.9), auth on the ledger routes.

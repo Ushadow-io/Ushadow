@@ -1,0 +1,2 @@
+# The root .gitignore ignores all tests/ folders. Keep ours.
+!tests/

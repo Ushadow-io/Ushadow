@@ -1,0 +1,10 @@
+# S1 spike: results hold private speech-derived data. Never commit them.
+out/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+llm_cache/
+*.private.*
+# Golden days are private real speech; keep them outside the repo or here only.
+golden/
