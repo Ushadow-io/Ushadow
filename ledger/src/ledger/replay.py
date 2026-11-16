@@ -2,6 +2,7 @@
 
     ledger-replay day.json --user-id USER                 # direct to Mongo (LEDGER_MONGO_URI)
     ledger-replay day.json --user-id USER --url http://localhost:8200   # via POST /ingest
+                                                    # (sends Bearer $LEDGER_TOKEN)
 
 The file holds a CaptureBundle, or an IngestRequest ({"userId", "bundle"}).
 """
@@ -12,10 +13,10 @@ import argparse
 import asyncio
 import json
 import sys
-import urllib.request
 from pathlib import Path
 from typing import Any
 
+from ledger import http_client
 from ledger.config import load_settings
 from ledger.models import IngestRequest, IngestResult
 from ledger.schema import CaptureBundle
@@ -40,14 +41,8 @@ async def replay_into(db: Any, req: IngestRequest) -> IngestResult:
 
 
 def _post(url: str, req: IngestRequest) -> dict[str, Any]:
-    http_req = urllib.request.Request(
-        url.rstrip("/") + "/ingest",
-        data=req.model_dump_json().encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(http_req, timeout=120) as resp:  # noqa: S310
-        return json.loads(resp.read())
+    """POST /ingest with `Authorization: Bearer $LEDGER_TOKEN`."""
+    return http_client.call(url, "POST", "/ingest", json.loads(req.model_dump_json()))
 
 
 async def _direct(req: IngestRequest) -> dict[str, Any]:

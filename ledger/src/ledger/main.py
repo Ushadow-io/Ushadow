@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -12,7 +13,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from ledger.config import load_settings
-from ledger.routers import read, write
+from ledger.routers import conversations, health, read, write
 from ledger.services import Services, build_services
 from ledger.stores import build_stores, ensure_indexes
 
@@ -22,13 +23,17 @@ SWEEP_SECONDS = 30
 
 
 async def _sweep_loop(services: Services) -> None:
-    """Close held-back moments of live recordings that went quiet."""
+    """Close held-back moments of live recordings that went quiet; then, when a model is
+    configured (or LEDGER_PIPELINE_AUTO=1), build conversations for moments marked ready."""
+    auto = services.models.configured or os.environ.get("LEDGER_PIPELINE_AUTO") == "1"
     while True:
         await asyncio.sleep(SWEEP_SECONDS)
         try:
             await services.moments.sweep()
+            if auto:
+                await services.conversations.pipeline.sweep()
         except Exception:  # keep the loop alive; the next tick tries again
-            log.exception("moment sweep failed")
+            log.exception("sweep failed")
 
 
 def create_app(db: Any = None, sweep: bool = True) -> FastAPI:
@@ -55,9 +60,11 @@ def create_app(db: Any = None, sweep: bool = True) -> FastAPI:
         if client:
             client.close()
 
-    app = FastAPI(title="Ushadow Ledger", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Ushadow Ledger", version="0.2.0", lifespan=lifespan)
+    app.include_router(health.router)
     app.include_router(read.router)
     app.include_router(write.router)
+    app.include_router(conversations.router)
     return app
 
 

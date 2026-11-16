@@ -1,28 +1,24 @@
-"""Read routes and health. Every read is scoped by userId."""
+"""Read routes. Every read is scoped by userId, asserted by an authenticated principal."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
 from ledger.models import Erasure, Moment
+from ledger.routers.auth import owner_query, require_principal
 from ledger.routers.deps import get_services, time_range
 from ledger.schema import CaptureGap, Link, Recording, TimeRange, Transcript, TranscriptCorrection
 from ledger.services import Services
 
-router = APIRouter(tags=["read"])
+router = APIRouter(tags=["read"], dependencies=[Depends(require_principal)])
 
-UserId = Query(min_length=1, description="Owner")
-
-
-@router.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok", "service": "ledger"}
+UserId = Depends(owner_query)
 
 
 @router.get("/recordings", response_model=list[Recording])
 async def recordings(
-    userId: str = UserId,
-    rng: TimeRange | None = Depends(time_range),  # noqa: N803
+    userId: str = UserId,  # noqa: N803
+    rng: TimeRange | None = Depends(time_range),
     services: Services = Depends(get_services),
 ) -> list[Recording]:
     return await services.query.recordings(userId, rng)
@@ -48,8 +44,8 @@ async def corrections(
 
 @router.get("/moments", response_model=list[Moment])
 async def moments(
-    userId: str = UserId,
-    rng: TimeRange | None = Depends(time_range),  # noqa: N803
+    userId: str = UserId,  # noqa: N803
+    rng: TimeRange | None = Depends(time_range),
     services: Services = Depends(get_services),
 ) -> list[Moment]:
     return await services.query.moments(userId, rng)
@@ -57,8 +53,8 @@ async def moments(
 
 @router.get("/gaps", response_model=list[CaptureGap])
 async def gaps(
-    userId: str = UserId,
-    rng: TimeRange | None = Depends(time_range),  # noqa: N803
+    userId: str = UserId,  # noqa: N803
+    rng: TimeRange | None = Depends(time_range),
     services: Services = Depends(get_services),
 ) -> list[CaptureGap]:
     return await services.query.gaps(userId, rng)
@@ -66,8 +62,8 @@ async def gaps(
 
 @router.get("/erasures", response_model=list[Erasure])
 async def erasures(
-    userId: str = UserId,
-    rng: TimeRange | None = Depends(time_range),  # noqa: N803
+    userId: str = UserId,  # noqa: N803
+    rng: TimeRange | None = Depends(time_range),
     services: Services = Depends(get_services),
 ) -> list[Erasure]:
     return await services.query.erasures(userId, rng)
@@ -75,8 +71,8 @@ async def erasures(
 
 @router.get("/links", response_model=list[Link])
 async def links(
-    userId: str = UserId,
-    rng: TimeRange | None = Depends(time_range),  # noqa: N803
+    userId: str = UserId,  # noqa: N803
+    rng: TimeRange | None = Depends(time_range),
     effective: bool = Query(default=False, description="One winning Link per key"),
     services: Services = Depends(get_services),
 ) -> list[Link]:

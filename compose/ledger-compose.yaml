@@ -24,12 +24,21 @@ services:
     pull_policy: build
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-ledger
     ports:
-      - "${LEDGER_PORT:-8200}:8200"
+      # Loopback only. Other containers reach the service at ledger:8200.
+      - "127.0.0.1:${LEDGER_PORT:-8200}:8200"
     environment:
       # Shared Mongo is a replica set (rs0); keep replicaSet in the URI.
       - LEDGER_MONGO_URI=${LEDGER_MONGO_URI:-mongodb://mongo:27017/?replicaSet=rs0}
       - LEDGER_DB=${LEDGER_DB:-ledger}
       - LEDGER_PORT=8200
+      # Required. The service refuses all calls (except /health) when this is not set.
+      - LEDGER_TOKEN=${LEDGER_TOKEN:?set LEDGER_TOKEN}
+      # Model for the conversation layer (OpenAI-compatible). Empty = rules only.
+      - LEDGER_LLM_BASE_URL=${LEDGER_LLM_BASE_URL:-}
+      - LEDGER_LLM_API_KEY=${LEDGER_LLM_API_KEY:-}
+      - LEDGER_LLM_MODEL=${LEDGER_LLM_MODEL:-}
+      - LEDGER_LLM_COMPOSER_MODEL=${LEDGER_LLM_COMPOSER_MODEL:-}
+      - LEDGER_PIPELINE_AUTO=${LEDGER_PIPELINE_AUTO:-}
     networks:
       infra-network:
         aliases:

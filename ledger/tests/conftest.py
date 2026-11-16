@@ -8,6 +8,7 @@ import httpx
 import pytest
 from mongomock_motor import AsyncMongoMockClient
 
+from ledger.llm import FakeBehaviour, FakeModel, Models, NullModel
 from ledger.main import create_app
 from ledger.models import IngestRequest
 from ledger.services import Services, build_services
@@ -25,8 +26,18 @@ def new_db():
     return AsyncMongoMockClient()["ledger_test"]
 
 
-def make_services(db=None) -> Services:
-    return build_services(build_stores(db if db is not None else new_db()), clock=fixed_clock)
+def make_services(db=None, models: Models | None = None) -> Services:
+    """No model unless given (tests never use the network)."""
+    models = models or Models(small=NullModel(), composer=NullModel())
+    store = build_stores(db if db is not None else new_db())
+    return build_services(store, clock=fixed_clock, models=models)
+
+
+def fake_models(behaviour: FakeBehaviour | None = None) -> Models:
+    return Models(
+        small=FakeModel(behaviour, name="fake-small"),
+        composer=FakeModel(behaviour, name="fake-composer"),
+    )
 
 
 @pytest.fixture
@@ -39,10 +50,18 @@ def request_day() -> IngestRequest:
     return IngestRequest(userId=USER, bundle=golden_day())
 
 
+TOKEN = "test-token-0123456789"
+
+
 @pytest.fixture
-async def client(services: Services):
+async def client(services: Services, monkeypatch):
+    monkeypatch.setenv("LEDGER_TOKEN", TOKEN)
+    monkeypatch.delenv("LEDGER_TOKENS", raising=False)
     app = create_app(db=object(), sweep=False)
     app.state.services = services  # lifespan is not run by ASGITransport
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://ledger") as http:
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://ledger", headers=headers
+    ) as http:
         yield http

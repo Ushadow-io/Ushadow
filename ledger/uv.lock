@@ -230,10 +230,11 @@ wheels = [
 
 [[package]]
 name = "ledger"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "motor" },
     { name = "pydantic" },
     { name = "uvicorn", extra = ["standard"] },
@@ -251,6 +252,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "motor", specifier = ">=3.5" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },

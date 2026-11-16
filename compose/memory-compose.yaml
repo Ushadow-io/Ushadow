@@ -1,0 +1,81 @@
+# Memory service definition (memory system, milestone M3: L3 memory port, separate from the ledger)
+# Environment variables are passed directly via docker compose subprocess env.
+# Side tables + ingest queue: own Mongo database on the shared Mongo from docker-compose.infra.yml,
+# which runs as replica set rs0 (keep replicaSet in the URI). Knowledge engine: Graphiti on the
+# shared Neo4j (engine choice pending the S1 spike). Reads the ledger over HTTP only.
+# Design: docs/analysis/memory-system-design.md. Plan: docs/analysis/memory-system-dev-plan.md.
+
+# =============================================================================
+# USHADOW METADATA (ignored by Docker, read by ushadow backend)
+# =============================================================================
+x-ushadow:
+  # Infra services to start before this compose (from docker-compose.infra.yml)
+  infra_services: ["mongo", "neo4j"]
+  memory:
+    display_name: "Memory"
+    description: "Memory port (L3): facts with proof, human corrections that survive rebuilds, erase cascade"
+    requires: [llm]
+    tags: ["memory", "facts", "knowledge-graph"]
+
+services:
+  memory:
+    image: ghcr.io/ushadow-io/u-memory:dev
+    build:
+      context: ${PROJECT_ROOT:-..}/memory/service
+      dockerfile: Dockerfile
+    pull_policy: build
+    container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-memory
+    ports:
+      # Loopback only. Other containers use http://memory:8210 on the networks below.
+      - "127.0.0.1:${MEMORY_PORT:-8210}:8210"
+    environment:
+      # Every route except /health needs Authorization: Bearer $MEMORY_TOKEN.
+      - MEMORY_TOKEN=${MEMORY_TOKEN:?set MEMORY_TOKEN}
+      - MEMORY_PORT=8210
+      - LEDGER_URL=${LEDGER_URL:-http://ledger:8200}
+      - LEDGER_TOKEN=${LEDGER_TOKEN:?set LEDGER_TOKEN}
+      - MEMORY_STORE=mongo
+      # Shared Mongo is a replica set (rs0); keep replicaSet in the URI.
+      - MEMORY_MONGO_URI=${MEMORY_MONGO_URI:-mongodb://mongo:27017/?replicaSet=rs0}
+      - MEMORY_DB=${MEMORY_DB:-memory}
+      # graphiti | fake (fake is in-process and lost on restart: tests and demos only)
+      - MEMORY_ENGINE=${MEMORY_ENGINE:-graphiti}
+      - GRAPHITI_TELEMETRY_ENABLED=false
+      - MEMORY_NEO4J_URI=${MEMORY_NEO4J_URI:-bolt://neo4j:7687}
+      - MEMORY_NEO4J_USER=${NEO4J_USERNAME:-neo4j}
+      - MEMORY_NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
+      # OpenAI-compatible endpoints. OPENAI_API_KEY is deliberately not a fallback.
+      - MEMORY_LLM_BASE_URL=${MEMORY_LLM_BASE_URL:-}
+      - MEMORY_LLM_API_KEY=${MEMORY_LLM_API_KEY:-}
+      - MEMORY_LLM_MODEL=${MEMORY_LLM_MODEL:-}
+      - MEMORY_LLM_SMALL_MODEL=${MEMORY_LLM_SMALL_MODEL:-}
+      - MEMORY_EMBED_BASE_URL=${MEMORY_EMBED_BASE_URL:-}
+      - MEMORY_EMBED_API_KEY=${MEMORY_EMBED_API_KEY:-}
+      - MEMORY_EMBED_MODEL=${MEMORY_EMBED_MODEL:-}
+      - MEMORY_EMBED_DIM=${MEMORY_EMBED_DIM:-768}
+      # Action facts: none | fake | openai extractor; memory | taskfacts store.
+      # taskfacts needs ushadow-facts[postgres] in the image (not yet) and TASKFACTS_DATABASE_URL.
+      - MEMORY_ACTION_EXTRACTOR=${MEMORY_ACTION_EXTRACTOR:-openai}
+      - MEMORY_ACTION_MODEL=${MEMORY_ACTION_MODEL:-}
+      - MEMORY_ACTION_STORE=${MEMORY_ACTION_STORE:-memory}
+      - TASKFACTS_DATABASE_URL=${TASKFACTS_DATABASE_URL:-}
+    networks:
+      infra-network:
+        aliases:
+          - memory  # other containers reach it at http://memory:8210
+      ushadow-network:
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8210/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+networks:
+  infra-network:
+    name: infra-network
+    external: true
+  ushadow-network:
+    name: ushadow-network
+    external: true

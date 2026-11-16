@@ -13,6 +13,7 @@ from ledger.stores.evidence import (
     SegmentStore,
     TranscriptStore,
 )
+from ledger.stores.l2 import ConversationStore, StateStore
 from ledger.stores.work import ErasureStore, LinkStore, MomentStore
 
 __all__ = ["EvidenceImmutableError", "Outcome", "Stores", "build_stores", "ensure_indexes"]
@@ -28,6 +29,8 @@ class Stores:
     links: LinkStore
     moments: MomentStore
     erasures: ErasureStore
+    conversations: ConversationStore
+    states: StateStore
 
 
 def build_stores(db: Any) -> Stores:
@@ -41,6 +44,8 @@ def build_stores(db: Any) -> Stores:
         links=LinkStore(db["links"]),
         moments=MomentStore(db["moments"]),
         erasures=ErasureStore(db["erasures"]),
+        conversations=ConversationStore(db["conversations"]),
+        states=StateStore(db["states"]),
     )
 
 
@@ -57,6 +62,8 @@ _INDEXES: dict[str, list[list[tuple[str, int]]]] = {
     ],
     "moments": [[("userId", 1), ("recordingId", 1), ("start", 1)], [("userId", 1), ("start", 1)]],
     "erasures": [[("userId", 1), ("recordingId", 1)]],
+    "conversations": [[("userId", 1), ("active", 1), ("start", 1)]],
+    "states": [[("userId", 1), ("start", 1)]],
 }
 
 
