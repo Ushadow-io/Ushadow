@@ -1,0 +1,8 @@
+line-length = 110
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "I", "B", "UP", "C90", "PLR0913"]
+
+[lint.isort]
+known-first-party = ["day", "harness", "runner", "story"]

@@ -29,7 +29,6 @@ class Deps:
     max_attempts: int = 5
     min_owner_words: int = 20  # owner gate; 0 turns it off
     lease_ttl: timedelta = timedelta(minutes=10)
-    cursor_overlap: timedelta = timedelta(seconds=30)  # re-read a little before the saved cursor
     worker_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 

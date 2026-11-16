@@ -15,6 +15,7 @@ from memory_service.actions.store import (
     ActionSubject,
     ControlledEraseUnsupported,
     InMemoryActionFactStore,
+    MongoActionFactStore,
     TaskfactsActionFactStore,
 )
 
@@ -29,6 +30,7 @@ __all__ = [
     "ControlledEraseUnsupported",
     "FakeActionExtractor",
     "InMemoryActionFactStore",
+    "MongoActionFactStore",
     "NoActionExtractor",
     "OpenAICompatibleActionExtractor",
     "TaskfactsActionFactStore",

@@ -7,6 +7,8 @@ out from retractions, as in taskfacts.
 
 from __future__ import annotations
 
+import hashlib
+import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
@@ -69,6 +71,10 @@ class ActionFactStore(Protocol):
         ...
 
 
+def _digest(*parts: str) -> str:
+    return hashlib.sha256("\x00".join(parts).encode()).hexdigest()
+
+
 def standing_of(rows: list[ActionFact]) -> list[ActionFact]:
     """taskfacts' rule, reduced to what memory writes: a fact stands unless a fact retracts it.
     Retractions and erase markers never stand themselves."""
@@ -115,6 +121,70 @@ class InMemoryActionFactStore:
 
     async def rows(self, scope: str) -> list[ActionFact]:
         return [f for f in self.log if f.scope == scope]
+
+
+class MongoActionFactStore:
+    """Action facts in the memory service's own Mongo database (collection `action_facts`), so
+    they survive a restart (the in-memory store does not). Same append-only shape as taskfacts;
+    a controlled erase blanks `value` in place and appends an `erased` fact. `record` is
+    idempotent per (scope, subject, memory_key) through a deterministic `_id`, also between
+    two writers."""
+
+    def __init__(self, db: Any) -> None:
+        self.c = db["action_facts"]
+        self._seq = db["action_fact_seq"]
+
+    async def ensure_indexes(self) -> None:
+        await self.c.create_index([("scope", 1), ("seq", 1)])
+
+    async def _next_seq(self, scope: str) -> int:
+        from pymongo import ReturnDocument
+
+        d = await self._seq.find_one_and_update({"_id": scope}, {"$inc": {"n": 1}}, upsert=True,
+                                                return_document=ReturnDocument.AFTER)
+        return int(d["n"])
+
+    async def _insert(self, draft: ActionFactDraft, fid: str, retracts: str | None) -> ActionFact | None:
+        from pymongo.errors import DuplicateKeyError
+
+        f = ActionFact(id=fid, subject=draft.subject, key=draft.key, occurred_at=draft.occurred_at,
+                       recorded_at=datetime.now(UTC), value=dict(draft.value), source=draft.source,
+                       scope=draft.scope, seq=await self._next_seq(draft.scope), retracts=retracts)
+        try:
+            await self.c.insert_one({"_id": fid, **f.model_dump(mode="json")})
+        except DuplicateKeyError:
+            return None
+        return f
+
+    async def record(self, draft: ActionFactDraft) -> ActionFact:
+        mk = draft.value.get("memory_key")
+        if not mk:
+            raise ValueError("an action fact draft needs value['memory_key']")
+        fid = "af_" + _digest(draft.scope, draft.subject.kind, draft.subject.id, str(mk))[:32]
+        stored = await self.c.find_one({"_id": fid})
+        made = None if stored else await self._insert(draft, fid, None)
+        return made or self._fact(stored or await self.c.find_one({"_id": fid}))
+
+    async def retract(self, fact: ActionFact, source: str) -> ActionFact:
+        draft = ActionFactDraft(subject=fact.subject, key=RETRACTION, occurred_at=fact.occurred_at,
+                                value={}, source=source, scope=fact.scope or "")
+        return await self._insert(draft, "af_" + uuid.uuid4().hex, fact.id)  # type: ignore[return-value]
+
+    async def erase(self, fact: ActionFact) -> None:
+        await self.c.update_one({"_id": fact.id}, {"$set": {"value": {}}})
+        draft = ActionFactDraft(subject=fact.subject, key=ERASED, occurred_at=fact.occurred_at,
+                                value={}, source="person", scope=fact.scope or "")
+        await self._insert(draft, "af_" + uuid.uuid4().hex, fact.id)
+
+    @staticmethod
+    def _fact(d: dict[str, Any]) -> ActionFact:
+        return ActionFact.model_validate({k: v for k, v in d.items() if k != "_id"})
+
+    async def rows(self, scope: str) -> list[ActionFact]:
+        return [self._fact(d) async for d in self.c.find({"scope": scope}).sort("seq", 1)]
+
+    async def standing(self, scope: str) -> list[ActionFact]:
+        return standing_of(await self.rows(scope))
 
 
 class TaskfactsActionFactStore:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from memory_service.ledger_client import HttpLedgerClient
+from memory_service.ledger_client import HttpLedgerClient, LedgerUnavailable
 from tests.helpers import T0, USER_A
 
 CONV = {"id": "c1", "revision": 2, "closedAt": "2024-01-10T09:01:00Z",
@@ -39,6 +39,12 @@ def make() -> tuple[HttpLedgerClient, list[httpx.Request]]:
     return HttpLedgerClient("http://ledger:8200", "secret", http), seen
 
 
+def make_with(path: str, body: object, headers: dict[str, str]) -> HttpLedgerClient:
+    http = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, json=body if r.url.path == path else [], headers=headers)))
+    return HttpLedgerClient("http://ledger:8200", "secret", http)
+
+
 async def test_conversations_unwrap_items_and_ask_for_retired():
     ledger, seen = make()
     items = await ledger.conversations(USER_A, T0, T0.replace(hour=10), include_retired=True)
@@ -53,8 +59,9 @@ async def test_conversations_unwrap_items_and_ask_for_retired():
 
 async def test_changes_sends_since_and_user():
     ledger, seen = make()
-    items = await ledger.changes(USER_A, T0)
-    assert [i.conversation_id for i in items] == ["c9", "c1"]
+    page = await ledger.changes(USER_A, T0)
+    assert [i.conversation_id for i in page.items] == ["c9", "c1"]
+    assert page.cursor == T0  # no header, no changedAt: the cursor stays at `since`
     assert seen[0].url.path == "/conversations/changes"
     assert seen[0].url.params["userId"] == USER_A and "since" in seen[0].url.params
     assert seen[0].headers["authorization"] == "Bearer secret"
@@ -76,3 +83,40 @@ async def test_a_wrapped_answer_is_refused_not_guessed():
     ledger = HttpLedgerClient("http://ledger:8200", "secret", http)
     with pytest.raises(ValueError):
         await ledger.conversations(USER_A, T0, T0.replace(hour=10))
+
+
+async def test_changes_cursor_is_the_ledger_header():
+    items = [{**RETIRED, "changedAt": "2024-01-11T00:00:00.000005Z"}]
+    ledger = make_with("/conversations/changes", items,
+                       {"X-Ledger-Cursor": "2024-01-11T00:00:00.000005Z"})
+    page = await ledger.changes(USER_A, T0)
+    assert page.items[0].changed_at == page.cursor
+    assert page.cursor.isoformat() == "2024-01-11T00:00:00.000005+00:00"
+
+
+async def test_changes_cursor_falls_back_to_last_changed_at():
+    items = [{**RETIRED, "changedAt": "2024-01-11T00:00:00Z"},
+             {**ACTIVE, "changedAt": "2024-01-12T00:00:00Z"}]
+    page = await make_with("/conversations/changes", items, {}).changes(USER_A, T0)
+    assert page.cursor.isoformat() == "2024-01-12T00:00:00+00:00"
+
+
+async def test_a_refused_token_is_a_clean_error_without_the_user_or_the_body():
+    http = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda r: httpx.Response(401, json={"detail": "Kim lives in Quokkaville"})))
+    ledger = HttpLedgerClient("http://ledger:8200", "wrong", http)
+    with pytest.raises(LedgerUnavailable) as err:
+        await ledger.transcripts(USER_A, "r1")
+    msg = str(err.value)
+    assert "401" in msg and "/recordings/{id}/transcripts" in msg and "LEDGER_TOKEN" in msg
+    assert USER_A not in msg and "r1" not in msg and "Quokkaville" not in msg
+
+
+async def test_an_unreachable_ledger_is_a_clean_error():
+    def down(r: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(down))
+    ledger = HttpLedgerClient("http://ledger:8200", "t", http)
+    with pytest.raises(LedgerUnavailable, match="could not be reached"):
+        await ledger.erasures(USER_A)

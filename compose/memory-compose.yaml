@@ -38,7 +38,7 @@ services:
       # Shared Mongo is a replica set (rs0); keep replicaSet in the URI.
       - MEMORY_MONGO_URI=${MEMORY_MONGO_URI:-mongodb://mongo:27017/?replicaSet=rs0}
       - MEMORY_DB=${MEMORY_DB:-memory}
-      # graphiti | fake (fake is in-process and lost on restart: tests and demos only)
+      # graphiti | fake | fake-mongo (fakes: tests and demos only; fake is lost on restart)
       - MEMORY_ENGINE=${MEMORY_ENGINE:-graphiti}
       - GRAPHITI_TELEMETRY_ENABLED=false
       - MEMORY_NEO4J_URI=${MEMORY_NEO4J_URI:-bolt://neo4j:7687}
@@ -53,11 +53,12 @@ services:
       - MEMORY_EMBED_API_KEY=${MEMORY_EMBED_API_KEY:-}
       - MEMORY_EMBED_MODEL=${MEMORY_EMBED_MODEL:-}
       - MEMORY_EMBED_DIM=${MEMORY_EMBED_DIM:-768}
-      # Action facts: none | fake | openai extractor; memory | taskfacts store.
+      # Action facts: none | fake | openai extractor; mongo | taskfacts | memory store.
+      # mongo = collection action_facts in MEMORY_DB; memory is in-process (lost on restart).
       # taskfacts needs ushadow-facts[postgres] in the image (not yet) and TASKFACTS_DATABASE_URL.
       - MEMORY_ACTION_EXTRACTOR=${MEMORY_ACTION_EXTRACTOR:-openai}
       - MEMORY_ACTION_MODEL=${MEMORY_ACTION_MODEL:-}
-      - MEMORY_ACTION_STORE=${MEMORY_ACTION_STORE:-memory}
+      - MEMORY_ACTION_STORE=${MEMORY_ACTION_STORE:-mongo}
       # Owner gate: skip conversations where the owner said fewer words than this (0 = off).
       - MEMORY_MIN_OWNER_WORDS=${MEMORY_MIN_OWNER_WORDS:-20}
       # Lease on a running work unit, seconds.

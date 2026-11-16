@@ -17,8 +17,8 @@ class Settings:
     store: str = "mongo"  # mongo | memory
     mongo_uri: str = "mongodb://mongo:27017/?replicaSet=rs0"
     db_name: str = "memory"
-    engine: str = "graphiti"  # graphiti | fake
-    actions: str = "memory"  # memory | taskfacts
+    engine: str = "graphiti"  # graphiti | fake | fake-mongo (fakes: tests and demos only)
+    actions: str = "mongo"  # mongo | taskfacts | memory (memory is lost on restart: tests only)
     taskfacts_database_url: str = field(default="", repr=False)
     extractor: str = "none"  # none | fake | openai
     min_owner_words: int = 20  # owner gate: fewer owner words in a conversation = skipped
@@ -36,7 +36,7 @@ def load_settings() -> Settings:
         mongo_uri=e.get("MEMORY_MONGO_URI", "mongodb://mongo:27017/?replicaSet=rs0"),
         db_name=e.get("MEMORY_DB", "memory"),
         engine=e.get("MEMORY_ENGINE", "graphiti"),
-        actions=e.get("MEMORY_ACTION_STORE", "memory"),
+        actions=e.get("MEMORY_ACTION_STORE", "mongo"),
         taskfacts_database_url=e.get("TASKFACTS_DATABASE_URL", ""),
         extractor=e.get("MEMORY_ACTION_EXTRACTOR", "none"),
         min_owner_words=int(e.get("MEMORY_MIN_OWNER_WORDS", "20")),

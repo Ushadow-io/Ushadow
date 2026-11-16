@@ -5,6 +5,11 @@ LEDGER_LLM_MODEL (gap model and state update), LEDGER_LLM_COMPOSER_MODEL (option
 LEDGER_LLM_MODEL), LEDGER_LLM_TIMEOUT (seconds, default 30). With no base URL or model the
 client is NullModel: every call is `unavailable`, and nothing is saved for it.
 
+TEST ONLY: LEDGER_TEST_FAKE_MODEL=1 uses the deterministic FakeModel (as `ledger-day --fake`),
+with LEDGER_TEST_FAKE_SPLIT_MARKER as its split marker. It is refused together with a real
+model, logged loudly, and not passed by compose/ledger-compose.yaml (its environment is an
+explicit list), so a deployment cannot switch it on by accident.
+
 Nothing here logs prompt or answer text.
 """
 
@@ -112,9 +117,28 @@ class Models:
         return not isinstance(self.small, NullModel)
 
 
+FAKE_SWITCH = "LEDGER_TEST_FAKE_MODEL"
+
+
+def _test_fake_models(base: str) -> Models:
+    from ledger.llm.fake import FakeBehaviour, FakeModel
+
+    if base:
+        raise RuntimeError(f"{FAKE_SWITCH}=1 and LEDGER_LLM_BASE_URL are both set; pick one")
+    marker = os.environ.get("LEDGER_TEST_FAKE_SPLIT_MARKER", "").strip() or None
+    log.warning("%s=1: the deterministic FAKE model builds conversations (tests only)", FAKE_SWITCH)
+    behaviour = FakeBehaviour(split_marker=marker)
+    return Models(FakeModel(behaviour), FakeModel(behaviour, name="fake-composer"))
+
+
 def load_models() -> Models:
     base = os.environ.get("LEDGER_LLM_BASE_URL", "").strip()
     model = os.environ.get("LEDGER_LLM_MODEL", "").strip()
+    switch = os.environ.get(FAKE_SWITCH, "").strip()
+    if switch:
+        if switch != "1":
+            raise RuntimeError(f"{FAKE_SWITCH} must be 1 or unset")
+        return _test_fake_models(base)
     if not base or not model:
         return Models(small=NullModel(), composer=NullModel())
     key = os.environ.get("LEDGER_LLM_API_KEY", "")

@@ -93,4 +93,4 @@ class Clock:
 def clocked_deps(clock: Clock, **over) -> Deps:
     """Deps whose service clock and fake-ledger change stamps are the same clock; no cursor overlap."""
     over.setdefault("ledger", FakeLedger(clock=clock))
-    return make_deps(clock=clock, cursor_overlap=timedelta(0), **over)
+    return make_deps(clock=clock, **over)

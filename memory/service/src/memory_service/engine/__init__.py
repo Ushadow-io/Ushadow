@@ -9,7 +9,7 @@ from memory_service.engine.base import (
     knowledge_key,
     statement_signature,
 )
-from memory_service.engine.fake import FakeEngine
+from memory_service.engine.fake import FakeEngine, PersistentFakeEngine
 
 __all__ = [
     "EngineEntity",
@@ -17,6 +17,7 @@ __all__ = [
     "EpisodeResult",
     "FakeEngine",
     "KnowledgeEngine",
+    "PersistentFakeEngine",
     "entity_key",
     "knowledge_key",
     "statement_signature",

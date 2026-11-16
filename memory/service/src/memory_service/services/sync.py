@@ -50,24 +50,29 @@ async def _apply(d: Deps, user_id: str, items: list[ConversationItem], rep: Sync
                 rep.retired += 1 if await retire(d, user_id, item.conversation_id) else 0
             elif item.conversation and item.conversation.closedAt and (
                     item.conversation_id not in retired):
-                rep.units.append(await ingest(d, user_id, item.conversation))
+                unit = await ingest(d, user_id, item.conversation)
+                rep.units.append(unit)
+                if unit.status == UnitStatus.pending:  # another worker holds the conversation
+                    rep.deferred += 1
         except LeaseBusy:
             rep.deferred += 1
 
 
 async def sync(d: Deps, user_id: str, start: datetime | None = None,
                end: datetime | None = None) -> SyncReport:
-    """No range: ask the ledger what changed since this user's saved cursor, then move the cursor
-    (to the time before the call, less a small overlap). With a range: that range, cursor kept."""
+    """No range: ask the ledger what changed since this user's saved cursor, then save the
+    cursor the LEDGER gave (its changedAt, strictly greater on the next call; never our own
+    clock, so clock skew between the services cannot lose a change). With a range: that range,
+    cursor kept. Work held by another worker (deferred) leaves the cursor where it was."""
     rep = SyncReport()
     rep.erasures_applied = await apply_ledger_erasures(d, user_id)
-    began = d.clock()
     if start is not None and end is not None:
         items = await d.ledger.conversations(user_id, start, end, include_retired=True)
-    else:
-        items = await d.ledger.changes(user_id, await d.tables.cursors.get(user_id) or EPOCH)
-    await _apply(d, user_id, items, rep)
-    if start is None and not rep.deferred:
-        rep.cursor = began - d.cursor_overlap
+        await _apply(d, user_id, items, rep)
+        return rep
+    page = await d.ledger.changes(user_id, await d.tables.cursors.get(user_id) or EPOCH)
+    await _apply(d, user_id, page.items, rep)
+    if not rep.deferred:
+        rep.cursor = page.cursor
         await d.tables.cursors.set(user_id, rep.cursor)
     return rep

@@ -23,10 +23,12 @@ def setup():
 async def test_sync_by_changes_is_cheap_and_repeatable():
     clock, deps, port = setup()
     seed(deps, USER_A, "c1", T0, [("S0", "Alice works at Acme."), ("S0", "I will call Bob.")])
+    changed_at = clock.t
     clock.advance()
     rep = await port.sync(USER_A)
-    assert [u.status for u in rep.units] == [UnitStatus.done] and rep.cursor == clock.t
-    assert await deps.tables.cursors.get(USER_A) == clock.t
+    # the saved cursor is the ledger's changedAt of the last item, not the memory clock
+    assert [u.status for u in rep.units] == [UnitStatus.done] and rep.cursor == changed_at
+    assert await deps.tables.cursors.get(USER_A) == changed_at
     facts_before = len(await deps.engine.facts(group_id(USER_A)))
 
     clock.advance()
@@ -44,6 +46,32 @@ async def test_sync_by_changes_is_cheap_and_repeatable():
     states = {u.revision: u.status for u in await port.queue(USER_A)}
     assert states == {1: UnitStatus.superseded, 2: UnitStatus.done}
     assert len(await deps.engine.facts(group_id(USER_A))) == facts_before
+
+
+async def test_cursor_is_the_ledger_change_time_so_clock_skew_loses_nothing():
+    """The ledger's clock is 10 min behind the memory service's. A change the ledger stamps
+    after the last sync (but 'before' the memory clock) must still come through."""
+    clock, deps, port = setup()
+    ledger_clock = Clock(clock.t - timedelta(minutes=10))
+    deps.ledger.clock = ledger_clock
+    seed(deps, USER_A, "c1", T0, [("S1", "Alice works at Acme.")])
+    first = await port.sync(USER_A)
+    assert [u.conversation_id for u in first.units] == ["c1"]
+    ledger_clock.advance(5)
+    seed(deps, USER_A, "c2", T0 + DAY, [("S1", "Dana likes Jazz.")])
+    clock.advance(60)
+    rep = await port.sync(USER_A)
+    assert [u.conversation_id for u in rep.units] == ["c2"]  # not lost to the skew
+    assert rep.cursor == ledger_clock.t
+    assert (await port.sync(USER_A)).units == []  # strictly greater: not read twice
+
+
+async def test_cursor_does_not_move_while_work_is_deferred():
+    clock, deps, port = setup()
+    seed(deps, USER_A, "c1", T0, [("S1", "Alice works at Acme.")])
+    assert await deps.tables.leases.acquire(USER_A, "c1", "other-worker", clock.t, timedelta(hours=1))
+    rep = await port.sync(USER_A)
+    assert rep.deferred == 1 and rep.cursor is None and await deps.tables.cursors.get(USER_A) is None
 
 
 async def test_cursor_is_per_user_and_range_form_keeps_it():

@@ -96,3 +96,13 @@ async def test_ledger_client_sends_bearer_token_and_user():
     assert seen[0].url.params["userId"] == USER_A and seen[1].url.path == "/recordings/rec-1/transcripts"
     with pytest.raises(ValueError):
         HttpLedgerClient("http://ledger:8200", "")
+
+
+async def test_a_ledger_that_refuses_the_token_is_a_clean_502():
+    refuse = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda r: httpx.Response(401, json={"detail": "missing or invalid bearer token"})))
+    deps = make_deps(ledger=HttpLedgerClient("http://ledger:8200", "wrong", refuse))
+    async with client(TOKEN, deps) as http:
+        r = await http.post("/sync", json={"userId": USER_A}, headers={"Authorization": f"Bearer {TOKEN}"})
+    assert r.status_code == 502
+    assert "ledger answered 401" in r.json()["detail"] and USER_A not in r.text

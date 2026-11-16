@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import httpx
 import pytest
 
 from ledger.llm import (
+    FakeModel,
     HttpModelConfig,
     ModelRequest,
     ModelUnavailable,
@@ -76,3 +78,26 @@ def test_env_config(monkeypatch):
     models = load_models()
     assert models.configured
     assert (models.small.name, models.composer.name) == ("small-1", "medium-1")
+
+
+def test_test_only_fake_model_switch(monkeypatch):
+    for name in ("LEDGER_LLM_BASE_URL", "LEDGER_LLM_MODEL", "LEDGER_TEST_FAKE_SPLIT_MARKER"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LEDGER_TEST_FAKE_MODEL", "1")
+    monkeypatch.setenv("LEDGER_TEST_FAKE_SPLIT_MARKER", "Different thing")
+    models = load_models()
+    assert isinstance(models.small, FakeModel) and models.configured
+    assert models.small.behaviour.split_marker == "Different thing"
+    monkeypatch.setenv("LEDGER_TEST_FAKE_MODEL", "yes")  # only exactly 1
+    with pytest.raises(RuntimeError):
+        load_models()
+    monkeypatch.setenv("LEDGER_TEST_FAKE_MODEL", "1")
+    monkeypatch.setenv("LEDGER_LLM_BASE_URL", "http://llm.local/v1")  # never with a real model
+    with pytest.raises(RuntimeError):
+        load_models()
+
+
+def test_compose_cannot_pass_the_fake_model_switch():
+    compose = Path(__file__).resolve().parents[2] / "compose" / "ledger-compose.yaml"
+    assert "environment:" in compose.read_text()
+    assert "LEDGER_TEST_" not in compose.read_text()

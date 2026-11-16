@@ -131,3 +131,24 @@ async def test_full_cycle_on_real_mongo(db):
 
 async def everything_engine(deps) -> str:
     return deps.engine.dump().lower()
+
+
+async def test_action_facts_and_fake_engine_survive_a_restart_on_real_mongo(db):
+    from memory_service.actions import MongoActionFactStore
+    from memory_service.engine import PersistentFakeEngine
+    from memory_service.ledger_client import FakeLedger
+    from tests.helpers import make_deps
+
+    ledger = FakeLedger()
+
+    def deps():
+        return make_deps(tables=mongo_tables(db), ledger=ledger, actions=MongoActionFactStore(db),
+                         engine=PersistentFakeEngine(db["fake_engine"]))
+
+    port = MemoryPort(deps())
+    seed(port.d, USER_A, "c1", T0, [("S1", "Zorblax works at Quuxcorp."), ("S0", "I will call Bob.")])
+    await port.sync(USER_A)
+    again = MemoryPort(deps())
+    assert await texts(again, USER_A, "Zorblax") == ["Zorblax works at Quuxcorp"]
+    assert [a.value["text"] for a in await again.action_facts(USER_A)] == ["I will call Bob"]
+    assert (await again.sync(USER_A)).units == []

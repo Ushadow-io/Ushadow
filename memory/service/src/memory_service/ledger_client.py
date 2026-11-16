@@ -3,7 +3,8 @@
 Ledger routes used (all with `Authorization: Bearer $LEDGER_TOKEN`, all scoped by `userId`):
   GET /conversations?userId&start&end[&includeRetired=true]
         -> [{conversation, fragments, state, retired?, retiredAt?, replacedBy?}]
-  GET /conversations/changes?userId&since -> the same items, retired included, ordered
+  GET /conversations/changes?userId&since -> the same items, retired included, ordered by
+        `changedAt`; header `X-Ledger-Cursor` = the next `since` (items have changedAt > since)
   GET /recordings/{id}/transcripts?userId -> [Transcript + status (provisional | final)]
   GET /recordings/{id}/corrections?userId -> [TranscriptCorrection]
   GET /erasures?userId -> [Erasure]
@@ -19,7 +20,7 @@ import httpx
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from memory_service.schema import Conversation, TimeRange, Transcript, TranscriptCorrection
-from memory_service.textutil import iso
+from memory_service.textutil import iso, parse_iso
 
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
@@ -39,6 +40,15 @@ class ConversationItem(BaseModel):
     retired: bool = False
     retired_at: datetime | None = None
     replaced_by: list[str] = Field(default_factory=list)
+    changed_at: datetime | None = None  # the ledger's change time: its cursor, not our clock
+
+
+class ChangePage(BaseModel):
+    """One answer of the change feed. `cursor` is the ledger's own: pass it as the next `since`
+    (strictly greater), so nothing is missed and nothing is read twice."""
+
+    items: list[ConversationItem]
+    cursor: datetime
 
 
 class LedgerErasure(BaseModel):
@@ -53,26 +63,48 @@ class LedgerErasure(BaseModel):
 
 def parse_item(raw: dict[str, Any]) -> ConversationItem:
     """The one place that reads a ledger list item (`{conversation, fragments, state, ...}`)."""
-    conv = raw["conversation"]
+    conv, changed = raw["conversation"], raw.get("changedAt")
     if raw.get("retired"):
         return ConversationItem(conversation_id=conv["id"], retired=True,
                                 retired_at=raw.get("retiredAt"),
-                                replaced_by=list(raw.get("replacedBy") or []))
+                                replaced_by=list(raw.get("replacedBy") or []), changed_at=changed)
     c = Conversation.model_validate(conv)
-    return ConversationItem(conversation_id=c.id, conversation=c)
+    return ConversationItem(conversation_id=c.id, conversation=c, changed_at=changed)
+
+
+def page_cursor(header: str | None, items: list[ConversationItem], since: datetime) -> datetime:
+    """The ledger's cursor: its `X-Ledger-Cursor` header, else the last item's changedAt, else
+    `since`. Never earlier than `since` (a cursor that goes back would re-read)."""
+    if header:
+        cursor = parse_iso(header)
+    else:
+        stamps = [i.changed_at for i in items if i.changed_at is not None]
+        cursor = max(stamps) if stamps else since
+    return max(cursor, since)
 
 
 class LedgerClient(Protocol):
     async def conversations(self, user_id: str, start: datetime, end: datetime,
                             include_retired: bool = False) -> list[ConversationItem]: ...
 
-    async def changes(self, user_id: str, since: datetime) -> list[ConversationItem]: ...
+    async def changes(self, user_id: str, since: datetime) -> ChangePage: ...
 
     async def transcripts(self, user_id: str, recording_id: str) -> list[LedgerTranscript]: ...
 
     async def corrections(self, user_id: str, recording_id: str) -> list[TranscriptCorrection]: ...
 
     async def erasures(self, user_id: str) -> list[LedgerErasure]: ...
+
+
+class LedgerUnavailable(RuntimeError):
+    """The ledger refused or could not be reached. The message names the HTTP status and the
+    route only: never the query (it holds the userId) and never a response body."""
+
+    def __init__(self, path: str, status: int | None) -> None:
+        self.path, self.status = path, status
+        what = f"answered {status}" if status is not None else "could not be reached"
+        hint = " (is LEDGER_TOKEN the token the ledger expects?)" if status in (401, 403) else ""
+        super().__init__(f"ledger {what} for {path}{hint}")
 
 
 def _list(body: Any, what: str) -> list[Any]:
@@ -90,9 +122,17 @@ class HttpLedgerClient:
         self._http = http or httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0))
 
     async def _get(self, path: str, params: dict[str, str]) -> Any:
-        r = await self._http.get(self._base + path, params=params, headers=self._headers)
-        r.raise_for_status()
-        return r.json()
+        return (await self._fetch(path, params)).json()
+
+    async def _fetch(self, path: str, params: dict[str, str]) -> httpx.Response:
+        route = path if not path.startswith("/recordings/") else "/recordings/{id}/" + path.rsplit("/", 1)[-1]
+        try:
+            r = await self._http.get(self._base + path, params=params, headers=self._headers)
+        except httpx.TransportError as exc:
+            raise LedgerUnavailable(route, None) from exc
+        if r.status_code != 200:
+            raise LedgerUnavailable(route, r.status_code)
+        return r
 
     async def conversations(self, user_id: str, start: datetime, end: datetime,
                             include_retired: bool = False) -> list[ConversationItem]:
@@ -101,9 +141,11 @@ class HttpLedgerClient:
             params["includeRetired"] = "true"
         return [parse_item(i) for i in _list(await self._get("/conversations", params), "conversations")]
 
-    async def changes(self, user_id: str, since: datetime) -> list[ConversationItem]:
-        body = await self._get("/conversations/changes", {"userId": user_id, "since": iso(since)})
-        return [parse_item(i) for i in _list(body, "conversation changes")]
+    async def changes(self, user_id: str, since: datetime) -> ChangePage:
+        r = await self._fetch("/conversations/changes", {"userId": user_id, "since": iso(since)})
+        items = [parse_item(i) for i in _list(r.json(), "conversation changes")]
+        return ChangePage(items=items, cursor=page_cursor(r.headers.get("x-ledger-cursor"), items,
+                                                          since))
 
     async def transcripts(self, user_id: str, recording_id: str) -> list[LedgerTranscript]:
         body = await self._get(f"/recordings/{recording_id}/transcripts", {"userId": user_id})
@@ -169,10 +211,13 @@ class FakeLedger:
                 out.append(item)
         return out
 
-    async def changes(self, user_id: str, since: datetime) -> list[ConversationItem]:
+    async def changes(self, user_id: str, since: datetime) -> ChangePage:
+        """Like the ledger: changedAt > since, oldest first, cursor = the last changedAt."""
         self.calls.append("changes")
-        rows = [(at, item) for item, at in self.convs.get(user_id, {}).values() if at > since]
-        return [item for _, item in sorted(rows, key=lambda r: (r[0], r[1].conversation_id))]
+        rows = sorted(((at, item) for item, at in self.convs.get(user_id, {}).values() if at > since),
+                      key=lambda r: (r[0], r[1].conversation_id))
+        items = [item.model_copy(update={"changed_at": at}) for at, item in rows]
+        return ChangePage(items=items, cursor=rows[-1][0] if rows else since)
 
     async def transcripts(self, user_id: str, recording_id: str) -> list[LedgerTranscript]:
         return [t.model_copy(deep=True) for t in self.trans.get(user_id, {}).get(recording_id, [])]

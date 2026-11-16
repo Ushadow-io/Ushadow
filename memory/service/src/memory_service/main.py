@@ -3,16 +3,21 @@ them from the environment at startup."""
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from memory_service.config import Settings, load_settings
+from memory_service.ledger_client import LedgerUnavailable
 from memory_service.routers.memory import router
 from memory_service.services.deps import Deps
 from memory_service.services.port import MemoryPort
 from memory_service.wiring import build_deps
+
+log = logging.getLogger("memory.ledger")
 
 
 def create_app(settings: Settings | None = None, deps: Deps | None = None) -> FastAPI:
@@ -31,6 +36,11 @@ def create_app(settings: Settings | None = None, deps: Deps | None = None) -> Fa
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.exception_handler(LedgerUnavailable)
+    async def ledger_unavailable(request: Request, exc: LedgerUnavailable) -> JSONResponse:
+        log.warning("%s", exc)  # status and route only: no userId, no text
+        return JSONResponse({"detail": str(exc)}, status_code=502)
 
     app.include_router(router)
     return app

@@ -9,6 +9,7 @@ import itertools
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from memory_service.engine.base import EngineEntity, EngineFact, EpisodeResult
 from memory_service.models import EpisodeInput, EpisodeLine, Statement
@@ -170,3 +171,107 @@ class FakeEngine:
 
 def _copy(f: EngineFact) -> EngineFact:
     return EngineFact(**{**f.__dict__, "episodes": list(f.episodes), "hints": list(f.hints)})
+
+
+def _fact_doc(f: EngineFact) -> dict:
+    d = {**f.__dict__, "hints": [h.model_dump(mode="json") for h in f.hints]}
+    for k in ("valid_at", "invalid_at"):
+        d[k] = d[k].isoformat() if d[k] else None
+    return d
+
+
+def _fact_from(d: dict) -> EngineFact:
+    d = {**d, "hints": [EvidenceRef.model_validate(h) for h in d.get("hints") or []]}
+    for k in ("valid_at", "invalid_at"):
+        d[k] = datetime.fromisoformat(d[k]) if d[k] else None
+    return EngineFact(**d)
+
+
+class PersistentFakeEngine(FakeEngine):
+    """The fake engine, kept in a Mongo collection (one document per group), so a test of
+    restarts and a scan of "every byte the service holds" can see it, as Neo4j would hold
+    Graphiti's graph. Tests and demos only (MEMORY_ENGINE=fake-mongo)."""
+
+    def __init__(self, coll: Any) -> None:
+        super().__init__()
+        self.coll = coll
+        self._loaded: set[str] = set()
+        self._ids_loaded = False
+
+    async def _load(self, group: str) -> None:
+        if not self._ids_loaded:
+            meta = await self.coll.find_one({"_id": "__ids__"})
+            self._ids = itertools.count((meta or {}).get("n", 0) + 1)
+            self._ids_loaded = True
+        if group in self._loaded:
+            return
+        d = await self.coll.find_one({"_id": group})
+        if d:
+            self.groups[group] = _Group(
+                facts={k: _fact_from(v) for k, v in d["facts"].items()}, episodes=d["episodes"],
+                entities={k: EngineEntity(**v) for k, v in d["entities"].items()})
+        self._loaded.add(group)
+
+    async def _save(self, group: str) -> None:
+        g = self.groups.get(group)
+        if g is None:
+            await self.coll.delete_one({"_id": group})
+        else:
+            await self.coll.replace_one({"_id": group}, {
+                "_id": group, "facts": {k: _fact_doc(f) for k, f in g.facts.items()},
+                "episodes": g.episodes, "entities": {k: e.__dict__ for k, e in g.entities.items()}},
+                upsert=True)
+        n = next(self._ids)  # remember how far the ids went (the count moves on by one)
+        await self.coll.replace_one({"_id": "__ids__"}, {"_id": "__ids__", "n": n}, upsert=True)
+
+    async def add_episode(self, group: str, episode: EpisodeInput) -> EpisodeResult:
+        await self._load(group)
+        out = await super().add_episode(group, episode)
+        await self._save(group)
+        return out
+
+    async def remove_episode(self, group: str, engine_episode_id: str) -> None:
+        await self._load(group)
+        await super().remove_episode(group, engine_episode_id)
+        await self._save(group)
+
+    async def assert_fact(self, group: str, statement: Statement, at: datetime) -> EngineFact:
+        await self._load(group)
+        out = await super().assert_fact(group, statement, at)
+        await self._save(group)
+        return out
+
+    async def delete_fact(self, group: str, engine_id: str) -> None:
+        await self._load(group)
+        await super().delete_fact(group, engine_id)
+        await self._save(group)
+
+    async def reopen_fact(self, group: str, engine_id: str) -> None:
+        await self._load(group)
+        await super().reopen_fact(group, engine_id)
+        await self._save(group)
+
+    async def clear(self, group: str) -> None:
+        await self._load(group)
+        await super().clear(group)
+        await self._save(group)
+
+    async def facts(self, group: str) -> list[EngineFact]:
+        await self._load(group)
+        return await super().facts(group)
+
+    async def get_fact(self, group: str, engine_id: str) -> EngineFact | None:
+        await self._load(group)
+        return await super().get_fact(group, engine_id)
+
+    async def search(self, group: str, query: str, limit: int) -> list[EngineFact]:
+        await self._load(group)
+        return await super().search(group, query, limit)
+
+    async def entity(self, group: str, engine_id: str) -> EngineEntity | None:
+        await self._load(group)
+        return await super().entity(group, engine_id)
+
+    async def entity_facts(self, group: str, engine_id: str) -> list[EngineFact]:
+        await self._load(group)
+        return await super().entity_facts(group, engine_id)
