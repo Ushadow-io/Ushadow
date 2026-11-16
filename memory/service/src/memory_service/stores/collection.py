@@ -22,6 +22,10 @@ class Collection(Protocol):
 
     async def delete_where(self, **equals: Any) -> int: ...
 
+    async def distinct(self, field: str, **equals: Any) -> list[Any]:
+        """The distinct values of `field` among documents matching `equals`."""
+        ...
+
     async def put_if_absent(self, doc: dict[str, Any]) -> bool:
         """Insert only if no document has this `_id`. Atomic. Gives whether it was inserted."""
         ...
@@ -56,6 +60,9 @@ class MemoryCollection:
             del self.docs[k]
         return len(gone)
 
+    async def distinct(self, field: str, **equals: Any) -> list[Any]:
+        return sorted({d[field] for d in self.docs.values() if field in d
+                       and all(d.get(k) == v for k, v in equals.items())})
 
     async def put_if_absent(self, doc: dict[str, Any]) -> bool:
         if doc["_id"] in self.docs:  # no await between check and write: atomic on one loop
@@ -93,6 +100,9 @@ class MongoCollection:
     async def delete_where(self, **equals: Any) -> int:
         res = await self.c.delete_many(equals)
         return res.deleted_count
+
+    async def distinct(self, field: str, **equals: Any) -> list[Any]:
+        return sorted(await self.c.distinct(field, equals))
 
     async def put_if_absent(self, doc: dict[str, Any]) -> bool:
         from pymongo.errors import DuplicateKeyError

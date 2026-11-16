@@ -211,3 +211,23 @@ Built on branch `feat/ledger-memory`: ledger core (M1), Chronicle adapter (1.3),
 | The root `.gitignore` ignores `tests/` | `ledger/.gitignore` and `memory/.gitignore` turn that rule off |
 
 Not done yet: a real golden-day export, a spike run with a real model, the adapter against a running Chronicle, the adapter and the ledger together over HTTP, the generic proxy check (1.9), auth on the ledger routes.
+
+## 10. Build status (2026-11-16, branch `feat/ledger-memory`)
+
+| Step | Status | Proof | Still open |
+|---|---|---|---|
+| M0 | Partly | Leak fix on branch `fix/graph-enrichment-user-filter` of `openmemory` (4 tests). Export tool written (15 tests). Schema merged to `main` of life-datatypes | No real export yet. No test questions yet. No `v2.0.0` tag. The leak fix does not separate users that share the Chronicle bucket |
+| S1 | Harness only | Fake-model run against a throw-away Neo4j | No run with a real model. No engine decision |
+| M1 | Built | Ledger tests on real Mongo. Replay two times gives the same moments. Erased words do not come back | Not run against a live Chronicle. Erase has no transaction. Erase does not reach Chronicle's copy |
+| M2 | Built, fake model | 3 replays give the same conversations with 0 new model calls. Largest input about 1,500 tokens. Human decisions stay | No real model. No real day. Chronicle timeline schedule is still on |
+| M3 | Built, fake engine | Proof check, human-wins, erase cascade, leases, worker. Together test passes | Graphiti adapter never ran live. taskfacts cannot erase, so action facts stay in the memory service's Mongo |
+| M4 | Backend built | Read API under `/v1`, per-agent scopes in one place, MCP at `/mcp`. Together test passes as processes and as Docker images | `why` for a knowledge fact is partial. No Qdrant or Neo4j views. No UltraMind or frontend change. Old mem0 routes are still there |
+| M5, M6 | Not started | | |
+
+Tests on 2026-11-16: ledger 116, memory service 101 (both with real Mongo), Chronicle adapter 25, export tool 15, together test 1 story in 2 runs.
+
+Rules that changed during the build:
+- Machine decisions (rule or model) are made again when their input words change. Human decisions never change. Reason: erased words must not stay inside old decisions.
+- A conversation id is anchored on its oldest stored moment. It stays when speech arrives before the start. When an id must change, the old conversation is retired with `replacedBy`.
+- Every route of both services needs a bearer token, except `/health`. No token set means every call is refused.
+- The memory service follows the ledger through `GET /conversations/changes` and the ledger's own cursor.

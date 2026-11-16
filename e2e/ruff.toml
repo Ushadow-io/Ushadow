@@ -5,4 +5,4 @@ target-version = "py312"
 select = ["E", "F", "I", "B", "UP", "C90", "PLR0913"]
 
 [lint.isort]
-known-first-party = ["day", "harness", "runner", "story"]
+known-first-party = ["day", "harness", "read_steps", "runner", "story"]

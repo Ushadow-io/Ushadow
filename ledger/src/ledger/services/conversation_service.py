@@ -66,6 +66,11 @@ class ConversationService:
         docs = await self._s.conversations.listing(user_id, rng, include_retired)
         return [_view(doc) for doc in docs]
 
+    async def get(self, user_id: str, conv_id: str) -> ConversationView | None:
+        """One active conversation of this owner, or None."""
+        doc = await self._s.conversations.load(user_id, conv_id)
+        return _view(doc) if doc is not None and doc.get("active") else None
+
     async def changes(self, user_id: str, since: datetime) -> list[ConversationView]:
         """Conversations (retired too) whose changedAt is after `since`, oldest change first."""
         return [_view(doc) for doc in await self._s.conversations.changes(user_id, since)]

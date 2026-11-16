@@ -75,6 +75,7 @@ class WorkUnit(ApiModel):
     status: UnitStatus = UnitStatus.pending
     attempts: int = 0
     last_error: str | None = None  # an exception type name, never a message (it can quote text)
+    next_attempt_at: AwareDatetime | None = None  # a failed unit is retried by the worker after this
     engine_episode_id: str | None = None
     facts_written: int = 0
     facts_rejected: int = 0
@@ -232,6 +233,7 @@ class SyncReport(ApiModel):
     retired: int = 0  # conversations undone because the ledger retired them
     erasures_applied: int = 0  # ledger erasures run here for the first time
     deferred: int = 0  # work held by another worker; the cursor did not move
+    retried: int = 0  # earlier failed or waiting units that were run again during this sync
     cursor: AwareDatetime | None = None
 
 
@@ -241,3 +243,4 @@ class RebuildReport(ApiModel):
     units_skipped: int = 0
     units_failed: int = 0
     decisions_applied: int = 0
+    erasures_applied: int = 0  # ledger erasures not yet applied here, taken in before the rebuild

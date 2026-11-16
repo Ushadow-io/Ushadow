@@ -29,9 +29,22 @@ class WorkQueue:
         doc = unit.model_dump(mode="json")
         await self.c.put({"_id": unit.id, **doc})
 
+    async def save_new(self, unit: WorkUnit) -> bool:
+        """Save only if no unit with this id exists yet (atomic), so a worker that lost the race
+        never overwrites the winner's running or done unit. Gives whether it was saved."""
+        unit.updated_at = datetime.now(UTC)
+        return await self.c.put_if_absent({"_id": unit.id, **unit.model_dump(mode="json")})
+
     async def for_conversation(self, user_id: str, conversation_id: str) -> list[WorkUnit]:
         docs = await self.c.find(user_id=user_id, conversation_id=conversation_id)
         return sorted((WorkUnit.model_validate(d) for d in docs), key=lambda u: u.revision)
+
+    async def users_with(self, *statuses: UnitStatus) -> list[str]:
+        """Users that have at least one unit in one of these statuses."""
+        out: set[str] = set()
+        for s in statuses:
+            out.update(await self.c.distinct("user_id", status=s.value))
+        return sorted(out)
 
     async def for_user(self, user_id: str, status: UnitStatus | None = None) -> list[WorkUnit]:
         q: dict[str, Any] = {"user_id": user_id}
@@ -217,6 +230,17 @@ class LeaseStore:
             return False
         return await self.c.replace_if(new, owner=cur["owner"], expires=cur["expires"])
 
+    async def renew(self, user_id: str, key: str, owner: str, now: datetime,
+                    ttl: timedelta) -> bool:
+        """Push the expiry out, only while this owner still holds the lease (a lease another
+        worker took over is not renewed). Gives whether it is still ours."""
+        doc_id = f"{user_id}|{key}"
+        cur = await self.c.get(doc_id)
+        if cur is None or cur["owner"] != owner:
+            return False
+        new = {"_id": doc_id, "user_id": user_id, "owner": owner, "expires": iso(now + ttl)}
+        return await self.c.replace_if(new, owner=owner, expires=cur["expires"])
+
     async def release(self, user_id: str, key: str, owner: str) -> None:
         await self.c.delete_where(_id=f"{user_id}|{key}", owner=owner)
 
@@ -233,6 +257,9 @@ class SyncCursors:
 
     async def set(self, user_id: str, since: datetime) -> None:
         await self.c.put({"_id": user_id, "user_id": user_id, "since": iso(since)})
+
+    async def users(self) -> list[str]:
+        return await self.c.distinct("user_id")
 
 
 class AppliedErasures:

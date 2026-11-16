@@ -22,7 +22,11 @@ class Settings:
     taskfacts_database_url: str = field(default="", repr=False)
     extractor: str = "none"  # none | fake | openai
     min_owner_words: int = 20  # owner gate: fewer owner words in a conversation = skipped
-    lease_seconds: int = 600  # lease on a running work unit
+    lease_seconds: int = 600  # lease on a running work unit (renewed while it runs)
+    worker_interval_seconds: float = 0  # background sync + retry loop; 0 = off
+    worker_users: tuple[str, ...] = ()  # users to sync even before they have a cursor or queue
+    max_attempts: int = 5  # a unit failing this often ends `failed` for good
+    retry_backoff_seconds: float = 30  # wait after attempt n: this * 2**(n-1), capped at 15 min
 
 
 def load_settings() -> Settings:
@@ -41,4 +45,8 @@ def load_settings() -> Settings:
         extractor=e.get("MEMORY_ACTION_EXTRACTOR", "none"),
         min_owner_words=int(e.get("MEMORY_MIN_OWNER_WORDS", "20")),
         lease_seconds=int(e.get("MEMORY_LEASE_SECONDS", "600")),
+        worker_interval_seconds=float(e.get("MEMORY_WORKER_INTERVAL_SECONDS") or 0),
+        worker_users=tuple(u.strip() for u in e.get("MEMORY_WORKER_USERS", "").split(",") if u.strip()),
+        max_attempts=int(e.get("MEMORY_MAX_ATTEMPTS", "5")),
+        retry_backoff_seconds=float(e.get("MEMORY_RETRY_BACKOFF_SECONDS", "30")),
     )

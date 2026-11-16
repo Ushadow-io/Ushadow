@@ -11,9 +11,11 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
+from starlette.routing import Route
 
 from ledger.config import load_settings
-from ledger.routers import conversations, health, read, write
+from ledger.mcp_server import MCP_PATH, build_mcp
+from ledger.routers import conversations, health, read, read_api, write
 from ledger.services import Services, build_services
 from ledger.stores import build_stores, ensure_indexes
 
@@ -52,7 +54,8 @@ def create_app(db: Any = None, sweep: bool = True) -> FastAPI:
         await ensure_indexes(database)
         app.state.services = build_services(build_stores(database))
         task = asyncio.create_task(_sweep_loop(app.state.services)) if sweep else None
-        yield
+        async with mcp.session_manager.run():
+            yield
         if task:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -65,6 +68,10 @@ def create_app(db: Any = None, sweep: bool = True) -> FastAPI:
     app.include_router(read.router)
     app.include_router(write.router)
     app.include_router(conversations.router)
+    app.include_router(read_api.router)
+    mcp, mcp_app = build_mcp(lambda: app.state.services)
+    app.state.mcp = mcp
+    app.router.routes.append(Route(MCP_PATH, endpoint=mcp_app, methods=["GET", "POST", "DELETE"]))
     return app
 
 
@@ -74,4 +81,4 @@ app = create_app()
 def run() -> None:  # pragma: no cover
     import uvicorn
 
-    uvicorn.run("ledger.main:app", host="0.0.0.0", port=load_settings().port)
+    uvicorn.run("ledger.main:app", host="0.0.0.0", port=load_settings().port, access_log=False)

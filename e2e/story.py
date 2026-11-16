@@ -46,6 +46,7 @@ from harness import (
     Tokens,
     free_port,
 )
+from read_steps import READ_SCOPES, ReadSteps
 
 USER = "chronicle-e2e-user"
 _WORD = re.compile(r"[^0-9a-z]+")
@@ -94,9 +95,11 @@ class Services:
                 traceback.print_exc()
 
 
-def ledger_env(mongo_uri: str, db: str, tokens: Tokens) -> dict[str, str]:
+def ledger_env(mongo_uri: str, db: str, tokens: Tokens, memory_url: str) -> dict[str, str]:
     return {"LEDGER_MONGO_URI": mongo_uri, "LEDGER_DB": db, "LEDGER_TOKENS": tokens.ledger_tokens(),
-            "LEDGER_TEST_FAKE_MODEL": "1", "LEDGER_TEST_FAKE_SPLIT_MARKER": SPLIT_MARKER}
+            "LEDGER_TEST_FAKE_MODEL": "1", "LEDGER_TEST_FAKE_SPLIT_MARKER": SPLIT_MARKER,
+            "LEDGER_SCOPES": json.dumps(READ_SCOPES), "MEMORY_URL": memory_url,
+            "MEMORY_TOKEN": tokens.memory}
 
 
 def memory_env(mongo_uri: str, db: str, ledger_url: str, ledger_token: str,
@@ -111,12 +114,13 @@ def process_services(dbs: TestDbs, uri: str, logs: Path) -> tuple[Services, str,
     tokens = Tokens()
     ldb, mdb = dbs.new(LEDGER_PREFIX), dbs.new(MEMORY_PREFIX)
     tag = ldb.removeprefix(LEDGER_PREFIX)[:6]  # log files per run: ledger-<tag>-<start>.log
-    ledger = Proc(f"ledger-{tag}", LEDGER_DIR, ["ledger.main:app"], ledger_env(uri, ldb, tokens),
-                  free_port(), logs)
+    memory_port = free_port()
+    ledger = Proc(f"ledger-{tag}", LEDGER_DIR, ["ledger.main:app", "--no-access-log"],
+                  ledger_env(uri, ldb, tokens, f"http://127.0.0.1:{memory_port}"), free_port(), logs)
     memory = Proc(f"memory-{tag}", MEMORY_DIR, ["memory_service.main:app_factory", "--factory",
                                                  "--no-access-log"],
                   memory_env(uri, mdb, ledger.url, tokens.memory_to_ledger, tokens),
-                  free_port(), logs)
+                  memory_port, logs)
     return Services(ledger, memory, tokens), ldb, mdb
 
 
@@ -125,10 +129,11 @@ def docker_services(dbs: TestDbs, inner_uri: str, logs: Path, net: str,
     tokens = Tokens()
     ldb, mdb = dbs.new(LEDGER_PREFIX), dbs.new(MEMORY_PREFIX)
     tag = ldb.removeprefix(LEDGER_PREFIX)
-    lname = f"e2e-ledger-{tag}"
-    ledger = Container(lname, images[0], {**ledger_env(inner_uri, ldb, tokens), "LEDGER_PORT": "8200"},
+    lname, mname = f"e2e-ledger-{tag}", f"e2e-memory-{tag}"
+    ledger = Container(lname, images[0], {**ledger_env(inner_uri, ldb, tokens, f"http://{mname}:8210"),
+                                          "LEDGER_PORT": "8200"},
                        free_port(), 8200, [net, "infra-network"], logs)
-    memory = Container(f"e2e-memory-{tag}", images[1],
+    memory = Container(mname, images[1],
                        memory_env(inner_uri, mdb, f"http://{lname}:8200", tokens.memory_to_ledger,
                                   tokens), free_port(), 8210, [net, "infra-network"], logs)
     return Services(ledger, memory, tokens), ldb, mdb
@@ -138,7 +143,7 @@ def docker_services(dbs: TestDbs, inner_uri: str, logs: Path, net: str,
 
 
 @dataclass
-class Story:
+class Story(ReadSteps):
     svc: Services
     dbs: TestDbs
     ldb: str
@@ -146,6 +151,7 @@ class Story:
     restart_after: str | None = None  # a step name; both services are killed and started after it
     results: list[tuple[str, bool, str]] = field(default_factory=list)
     notes: dict[str, Any] = field(default_factory=dict)
+    USER = USER
 
     # ---- http ----
     def _l(self, method: str, path: str, token: str | None = "chronicle", **kw: Any) -> httpx.Response:
@@ -157,8 +163,9 @@ class Story:
         return httpx.request(method, self.svc.memory.url + path, headers=headers, timeout=120, **kw)
 
     def _tok(self, which: str) -> str:
-        return {"chronicle": self.svc.tokens.chronicle, "memory": self.svc.tokens.memory,
-                "memory_to_ledger": self.svc.tokens.memory_to_ledger}.get(which, which)
+        t = self.svc.tokens
+        return {"chronicle": t.chronicle, "memory": t.memory, "memory_to_ledger": t.memory_to_ledger,
+                "agent": t.agent, "reader": t.reader}.get(which, which)
 
     def ok(self, r: httpx.Response, what: str) -> Any:
         check(r.status_code == 200, f"{what}: HTTP {r.status_code} {r.text[:300]}")
@@ -473,7 +480,8 @@ class Story:
                 ("f2 human join retires a conversation", self.f2_human_join),
                 ("g ledger erase reaches memory", self.g_erase),
                 ("h late evidence", self.h_late_evidence),
-                ("i auth", self.i_auth)]
+                ("i auth", self.i_auth),
+                *self.read_steps()]
 
 
 def bad_token_memory(svc: Services, dbs: TestDbs, uri: str, logs: Path) -> Proc:

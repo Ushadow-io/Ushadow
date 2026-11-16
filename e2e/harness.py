@@ -41,9 +41,12 @@ class Tokens:
     chronicle: str = field(default_factory=lambda: secrets.token_hex(16), repr=False)
     memory_to_ledger: str = field(default_factory=lambda: secrets.token_hex(16), repr=False)
     memory: str = field(default_factory=lambda: secrets.token_hex(16), repr=False)
+    agent: str = field(default_factory=lambda: secrets.token_hex(16), repr=False)  # read API
+    reader: str = field(default_factory=lambda: secrets.token_hex(16), repr=False)  # read API
 
     def ledger_tokens(self) -> str:
-        return f"chronicle:{self.chronicle},memory:{self.memory_to_ledger}"
+        return (f"chronicle:{self.chronicle},memory:{self.memory_to_ledger},agent:{self.agent},"
+                f"reader:{self.reader}")
 
 
 class TestDbs:

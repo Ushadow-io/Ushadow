@@ -63,6 +63,12 @@ services:
       - MEMORY_MIN_OWNER_WORDS=${MEMORY_MIN_OWNER_WORDS:-20}
       # Lease on a running work unit, seconds.
       - MEMORY_LEASE_SECONDS=${MEMORY_LEASE_SECONDS:-600}
+      # Background worker: every N seconds, per known user, sync with the ledger and retry failed
+      # units (backoff, then terminal `failed`). 0 = off. Safe with several instances (leases).
+      - MEMORY_WORKER_INTERVAL_SECONDS=${MEMORY_WORKER_INTERVAL_SECONDS:-0}
+      - MEMORY_WORKER_USERS=${MEMORY_WORKER_USERS:-}
+      - MEMORY_MAX_ATTEMPTS=${MEMORY_MAX_ATTEMPTS:-5}
+      - MEMORY_RETRY_BACKOFF_SECONDS=${MEMORY_RETRY_BACKOFF_SECONDS:-30}
       - TASKFACTS_DATABASE_URL=${TASKFACTS_DATABASE_URL:-}
     networks:
       infra-network:

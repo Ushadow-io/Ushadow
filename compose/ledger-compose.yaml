@@ -1,4 +1,4 @@
-# Ledger service definition (memory system, milestone M1: evidence + moments)
+# Ledger service definition (memory system: evidence, moments, conversations, read API + MCP)
 # Environment variables are passed directly via docker compose subprocess env.
 # Uses the shared Mongo from docker-compose.infra.yml, which runs as replica set rs0.
 # Design: docs/analysis/memory-system-design.md. Plan: docs/analysis/memory-system-dev-plan.md.
@@ -11,7 +11,7 @@ x-ushadow:
   infra_services: ["mongo"]
   ledger:
     display_name: "Ledger"
-    description: "Append-only evidence ledger: recordings, transcript revisions, gaps, decisions and moments"
+    description: "Evidence ledger and read API (/v1, MCP at /mcp): recordings, transcripts, gaps, decisions, conversations"
     requires: []
     tags: ["memory", "ledger", "evidence", "transcripts"]
 
@@ -39,6 +39,18 @@ services:
       - LEDGER_LLM_MODEL=${LEDGER_LLM_MODEL:-}
       - LEDGER_LLM_COMPOSER_MODEL=${LEDGER_LLM_COMPOSER_MODEL:-}
       - LEDGER_PIPELINE_AUTO=${LEDGER_PIPELINE_AUTO:-}
+      # More principals as `name:token,name:token` (e.g. agents of the read API).
+      - LEDGER_TOKENS=${LEDGER_TOKENS:-}
+      # Read API (/v1, /mcp) scopes per principal, JSON (see ledger/src/ledger/scopes.py).
+      # Inline LEDGER_SCOPES wins over LEDGER_SCOPES_FILE. Empty = every principal is denied.
+      - LEDGER_SCOPES=${LEDGER_SCOPES:-}
+      - LEDGER_SCOPES_FILE=${LEDGER_SCOPES_FILE:-}
+      # Host allow-list of the MCP endpoint (DNS-rebinding check). Empty = loopback + ledger.
+      - LEDGER_MCP_ALLOWED_HOSTS=${LEDGER_MCP_ALLOWED_HOSTS:-}
+      # Memory service, for facts in read-API answers. Unreachable or unset: answers are
+      # `partial: true` with the ledger parts only. The token is the memory service's MEMORY_TOKEN.
+      - MEMORY_URL=${MEMORY_URL:-http://memory:8210}
+      - MEMORY_TOKEN=${MEMORY_TOKEN:-}
     networks:
       infra-network:
         aliases:

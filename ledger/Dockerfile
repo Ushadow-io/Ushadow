@@ -20,4 +20,5 @@ EXPOSE 8200
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://localhost:{os.environ.get(\"LEDGER_PORT\", \"8200\")}/health')"
 
-CMD ["sh", "-c", "exec /app/.venv/bin/uvicorn ledger.main:app --host 0.0.0.0 --port ${LEDGER_PORT}"]
+# --no-access-log: query strings carry userId and search text (read API).
+CMD ["sh", "-c", "exec /app/.venv/bin/uvicorn ledger.main:app --host 0.0.0.0 --port ${LEDGER_PORT} --no-access-log"]

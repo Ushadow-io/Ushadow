@@ -3,16 +3,22 @@
 - a new revision first unwinds the old one (episode removed, the facts it closed reopened, its
   proofs and action facts retracted), so revisions never leave duplicates;
 - a retry after a crash unwinds its own half-written episode first;
-- a lease per (user, conversation) keeps two workers off the same unit; an expired lease can be
-  taken over;
+- a lease per (user, conversation) keeps two workers off the same unit. The running worker
+  renews it (heartbeat) every third of the TTL, so it expires only when the worker is gone; an
+  expired lease can be taken over;
+- a failed unit waits `retry_backoff * 2**(attempts-1)` (capped) before an automatic retry and
+  ends `failed` for good after `max_attempts`;
 - a conversation whose owner said too few words is `skipped`, with a counted reason.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
-from collections.abc import Callable
-from datetime import datetime
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 
 from memory_service.actions import SUBJECT_KIND, ActionFactDraft, ActionSubject
 from memory_service.engine import EngineFact
@@ -204,6 +210,40 @@ async def take_lease(d: Deps, user_id: str, conversation_id: str) -> bool:
     return await d.tables.leases.acquire(user_id, conversation_id, d.worker_id, d.clock(), d.lease_ttl)
 
 
+@asynccontextmanager
+async def heartbeat(d: Deps, user_id: str, key: str) -> AsyncIterator[None]:
+    """Keep a lease this worker holds alive while the body runs; stop renewing when it ends.
+    Call after `take_lease`, release after leaving. A lease lost anyway is logged (by key only)."""
+
+    async def beat() -> None:
+        while True:
+            await asyncio.sleep(d.lease_ttl.total_seconds() / 3)
+            try:
+                if not await d.tables.leases.renew(user_id, key, d.worker_id, d.clock(), d.lease_ttl):
+                    log.warning("lease lost key=%s", key)
+                    return
+            except Exception as exc:  # noqa: BLE001 - a store blip: try again next beat
+                log.warning("lease renew failed key=%s error=%s", key, type(exc).__name__)
+
+    task = asyncio.create_task(beat())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+def backoff(d: Deps, unit: WorkUnit) -> timedelta:
+    return min(d.retry_backoff * 2 ** max(unit.attempts - 1, 0), d.retry_backoff_cap)
+
+
+def is_due(d: Deps, unit: WorkUnit) -> bool:
+    """Whether the worker may run this unit now: attempts left and no backoff still waiting."""
+    return unit.attempts < d.max_attempts and (
+        unit.next_attempt_at is None or unit.next_attempt_at <= d.clock())
+
+
 async def _execute(d: Deps, unit: WorkUnit) -> WorkUnit:
     unit.status, unit.attempts, unit.last_error = UnitStatus.running, unit.attempts + 1, None
     await d.tables.queue.save(unit)
@@ -212,30 +252,37 @@ async def _execute(d: Deps, unit: WorkUnit) -> WorkUnit:
         if unit.engine_episode_id:  # a retry: remove the half-written episode first
             await unwind_unit(d, unit, retract_actions=False)
         unit.status = await _run(d, unit)
+        unit.next_attempt_at = None
         await human_wins.reapply(d, unit.user_id)
     except Exception as exc:  # noqa: BLE001 - saved on the unit; the message can quote text
         unit.status, unit.last_error = UnitStatus.failed, type(exc).__name__
+        unit.next_attempt_at = None if unit.attempts >= d.max_attempts else d.clock() + backoff(d, unit)
         log.warning("ingest failed conversation=%s revision=%s error=%s",
                     unit.conversation_id, unit.revision, type(exc).__name__)
     await d.tables.queue.save(unit)
     return unit
 
 
-async def process(d: Deps, unit: WorkUnit) -> WorkUnit:
+async def process(d: Deps, unit: WorkUnit, only_due: bool = False) -> WorkUnit:
     """Run one unit under the conversation's lease. Without the lease the unit is left (and saved
     as pending when new) for a later run_pending. A unit another worker finished meanwhile is
-    returned as stored, not run again: callers that want a re-run save it as pending first."""
+    returned as stored, not run again: callers that want a re-run save it as pending first.
+    `only_due` (the worker): also leave a unit another worker just failed and put into backoff."""
     if not await take_lease(d, unit.user_id, unit.conversation_id):
         stored = await d.tables.queue.get(unit.id)
         if stored is None:
             unit.status = UnitStatus.pending
-            await d.tables.queue.save(unit)
+            if not await d.tables.queue.save_new(unit):  # the lease holder saved it first
+                return await d.tables.queue.get(unit.id) or unit
         return stored or unit
     try:
         stored = await d.tables.queue.get(unit.id)
         if stored and stored.status in (UnitStatus.done, UnitStatus.superseded, UnitStatus.skipped):
             return stored
-        return await _execute(d, stored or unit)
+        if only_due and stored and not is_due(d, stored):
+            return stored
+        async with heartbeat(d, unit.user_id, unit.conversation_id):
+            return await _execute(d, stored or unit)
     finally:
         await d.tables.leases.release(unit.user_id, unit.conversation_id, d.worker_id)
 
@@ -249,6 +296,8 @@ async def ingest(d: Deps, user_id: str, conv: Conversation,
     if existing and existing.status in (UnitStatus.done, UnitStatus.superseded,
                                         UnitStatus.running, UnitStatus.skipped):
         return existing
+    if existing and existing.status == UnitStatus.failed and existing.attempts >= d.max_attempts:
+        return existing  # out of attempts: stays failed (erase or rebuild reset it)
     unit = existing or WorkUnit(id=unit_id, user_id=user_id, conversation_id=conv.id,
                                 revision=conv.revision, parts=conv.parts,
                                 reference_time=reference_time or conv.range.start)
@@ -260,10 +309,13 @@ async def ingest(d: Deps, user_id: str, conv: Conversation,
     return await process(d, unit)
 
 
-async def run_pending(d: Deps, user_id: str) -> list[WorkUnit]:
+async def run_pending(d: Deps, user_id: str, only_due: bool = False) -> list[WorkUnit]:
     """Retry pending, failed and stuck-running units (below max_attempts), oldest revision first.
-    Safe with several workers: a unit whose conversation another worker holds is left alone."""
+    Safe with several workers: a unit whose conversation another worker holds is left alone.
+    `only_due` (sync and the worker) also waits out each failed unit's backoff; the manual
+    /queue/run does not."""
     retry = (UnitStatus.pending, UnitStatus.failed, UnitStatus.running)
     units = [u for u in await d.tables.queue.for_user(user_id)
-             if u.status in retry and u.attempts < d.max_attempts]
-    return [await process(d, u) for u in sorted(units, key=lambda u: (u.conversation_id, u.revision))]
+             if u.status in retry and u.attempts < d.max_attempts and (not only_due or is_due(d, u))]
+    return [await process(d, u, only_due) for u in sorted(units,
+                                                          key=lambda u: (u.conversation_id, u.revision))]

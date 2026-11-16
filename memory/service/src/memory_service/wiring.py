@@ -82,4 +82,6 @@ async def build_deps(s: Settings) -> Deps:
     return Deps(engine=_engine(s, db), tables=await _tables(s, db),
                 ledger=HttpLedgerClient(s.ledger_url, s.ledger_token),
                 actions=await _actions(s, db), extractor=_extractor(s),
-                min_owner_words=s.min_owner_words, lease_ttl=timedelta(seconds=s.lease_seconds))
+                min_owner_words=s.min_owner_words, lease_ttl=timedelta(seconds=s.lease_seconds),
+                max_attempts=s.max_attempts,
+                retry_backoff=timedelta(seconds=s.retry_backoff_seconds))

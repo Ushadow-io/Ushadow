@@ -5,12 +5,19 @@ from __future__ import annotations
 from datetime import datetime
 
 from memory_service.actions import ActionFact, ControlledEraseUnsupported
-from memory_service.ledger_client import EPOCH
+from memory_service.ledger_client import EPOCH, LedgerErasure
 from memory_service.models import EraseReport, RebuildReport, UnitStatus, WorkUnit
 from memory_service.schema import TimeRange
 from memory_service.services import human_wins
 from memory_service.services.deps import Deps, action_scope
-from memory_service.services.ingest import process, retract_actions_where, unwind_unit
+from memory_service.services.ingest import (
+    LeaseBusy,
+    heartbeat,
+    process,
+    retract_actions_where,
+    take_lease,
+    unwind_unit,
+)
 from memory_service.textutil import group_id, overlaps, parse_iso
 
 
@@ -77,14 +84,47 @@ async def erase(d: Deps, user_id: str, recording_id: str, rng: TimeRange) -> Era
 async def apply_ledger_erasures(d: Deps, user_id: str) -> int:
     """Run the erase cascade for every ledger erasure not yet applied here (by erasure id), so an
     erase done in the ledger reaches memory even if nobody called memory /erase. Gives the count."""
-    n = 0
-    for e in sorted(await d.ledger.erasures(user_id), key=lambda e: e.id):
-        if await d.tables.applied.has(user_id, e.id):
-            continue
-        await erase(d, user_id, e.recordingId, e.range)
-        await d.tables.applied.add(user_id, e.id)
-        n += 1
-    return n
+    todo = await _unapplied(d, user_id)
+    if not todo:
+        return 0
+    if not await take_lease(d, user_id, ERASURE_LEASE):
+        raise LeaseBusy(ERASURE_LEASE)  # another worker is applying them
+    try:
+        async with heartbeat(d, user_id, ERASURE_LEASE):
+            n = 0
+            for e in await _unapplied(d, user_id):  # again: the other worker may have finished
+                await erase(d, user_id, e.recordingId, e.range)
+                await d.tables.applied.add(user_id, e.id)
+                n += 1
+            return n
+    finally:
+        await d.tables.leases.release(user_id, ERASURE_LEASE, d.worker_id)
+
+
+ERASURE_LEASE = "__erasures__"  # lease key, not a conversation id
+
+
+async def _unapplied(d: Deps, user_id: str) -> list[LedgerErasure]:
+    return [e for e in sorted(await d.ledger.erasures(user_id), key=lambda e: e.id)
+            if not await d.tables.applied.has(user_id, e.id)]
+
+
+async def _take_in_erasures(d: Deps, user_id: str) -> int:
+    """For a rebuild: note every unapplied ledger erasure as an erased range (so the rebuild
+    leaves those words out) and erase its action facts, without the per-unit cascade (the
+    rebuild redoes every unit anyway). Marked applied, so a later sync does not run it again."""
+    if not await take_lease(d, user_id, ERASURE_LEASE):
+        raise LeaseBusy(ERASURE_LEASE)
+    try:
+        async with heartbeat(d, user_id, ERASURE_LEASE):
+            todo = await _unapplied(d, user_id)
+            for e in todo:
+                await d.tables.erased.add(user_id, e.recordingId, e.range)
+                await _erase_actions(d, user_id, e.recordingId, e.range, EraseReport())
+                await d.tables.applied.add(user_id, e.id)
+            return len(todo)
+    finally:
+        await d.tables.leases.release(user_id, ERASURE_LEASE, d.worker_id)
 
 
 async def rebuild(d: Deps, user_id: str, start: datetime | None = None,
@@ -93,6 +133,7 @@ async def rebuild(d: Deps, user_id: str, start: datetime | None = None,
     and action facts are kept (action writes are idempotent). Action facts of conversations that
     no longer exist in the ledger (retired; for a full rebuild also any unknown one) are retracted."""
     rep = RebuildReport()
+    rep.erasures_applied = await _take_in_erasures(d, user_id)  # before anything is re-read
     await d.engine.clear(group_id(user_id))
     for table in (d.tables.registry, d.tables.proofs, d.tables.closures):
         await table.delete_user(user_id)
