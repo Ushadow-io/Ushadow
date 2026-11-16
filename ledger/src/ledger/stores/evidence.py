@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ledger.revisions import is_live
+from ledger.revisions import provisional
 from ledger.schema import (
     CaptureGap,
     Recording,
@@ -102,20 +102,19 @@ class TranscriptStore(EvidenceStore):
 class SegmentStore(EvidenceStore):
     """One document per segment. Key = recording + revision + time range.
 
-    Live segments are keyed on their start only (Chronicle refines a live segment's end and
-    text under the same start), so a refined live segment replaces the old one.
+    Provisional segments are keyed on their start only (Chronicle refines a live segment's end
+    and text under the same start), so a refined provisional segment replaces the old one.
     """
 
     @staticmethod
-    def key(user_id: str, recording_id: str, revision: str, seg: Segment) -> str:
-        if is_live(revision):
-            return f"{user_id}|{recording_id}|{revision}|{ts(seg.start)}"
-        return f"{user_id}|{recording_id}|{revision}|{ts(seg.start)}|{ts(seg.end)}"
+    def key(user_id: str, transcript: Transcript, seg: Segment) -> str:
+        base = f"{user_id}|{transcript.recordingId}|{transcript.revision}|{ts(seg.start)}"
+        return base if provisional(transcript) else f"{base}|{ts(seg.end)}"
 
     async def save(self, user_id: str, transcript: Transcript, seg: Segment) -> Outcome:
-        """Final revisions: insert once. Live revision: the provisional path (see ingest)."""
+        """Final revisions: insert once. Provisional: the overwrite path (see ingest)."""
         doc = {
-            "_id": self.key(user_id, transcript.recordingId, transcript.revision, seg),
+            "_id": self.key(user_id, transcript, seg),
             "userId": user_id,
             "recordingId": transcript.recordingId,
             "revision": transcript.revision,
@@ -123,7 +122,7 @@ class SegmentStore(EvidenceStore):
             "end": ts(seg.end),
             "body": seg.model_dump(mode="json"),
         }
-        if is_live(transcript.revision):
+        if provisional(transcript):
             return await self.put_provisional(doc)
         return await self.put(doc)
 

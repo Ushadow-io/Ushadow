@@ -35,6 +35,9 @@ packages = ["src/ledger"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+markers = [
+    "real_mongo: runs against a real MongoDB (set LEDGER_TEST_MONGO_URI; skipped when unset)",
+]
 
 [tool.ruff]
 line-length = 100

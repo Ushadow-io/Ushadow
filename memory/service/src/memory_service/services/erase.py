@@ -5,11 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 
 from memory_service.actions import ActionFact, ControlledEraseUnsupported
+from memory_service.ledger_client import EPOCH
 from memory_service.models import EraseReport, RebuildReport, UnitStatus, WorkUnit
 from memory_service.schema import TimeRange
 from memory_service.services import human_wins
 from memory_service.services.deps import Deps, action_scope
-from memory_service.services.ingest import EPOCH, process, unwind_unit
+from memory_service.services.ingest import process, retract_actions_where, unwind_unit
 from memory_service.textutil import group_id, overlaps, parse_iso
 
 
@@ -66,25 +67,47 @@ async def erase(d: Deps, user_id: str, recording_id: str, rng: TimeRange) -> Era
         rep.closures_reopened += await unwind_unit(d, unit, retract_actions=False)
         rep.episodes_removed += 1
         unit.status, unit.attempts = UnitStatus.pending, 0
+        await d.tables.queue.save(unit)
         if (await process(d, unit)).status == UnitStatus.done:
             rep.episodes_reingested += 1
     await human_wins.reapply(d, user_id)
     return rep
 
 
+async def apply_ledger_erasures(d: Deps, user_id: str) -> int:
+    """Run the erase cascade for every ledger erasure not yet applied here (by erasure id), so an
+    erase done in the ledger reaches memory even if nobody called memory /erase. Gives the count."""
+    n = 0
+    for e in sorted(await d.ledger.erasures(user_id), key=lambda e: e.id):
+        if await d.tables.applied.has(user_id, e.id):
+            continue
+        await erase(d, user_id, e.recordingId, e.range)
+        await d.tables.applied.add(user_id, e.id)
+        n += 1
+    return n
+
+
 async def rebuild(d: Deps, user_id: str, start: datetime | None = None,
                   end: datetime | None = None) -> RebuildReport:
     """Empty the engine for the user and ingest again from the ledger. Human wins, erased ranges
-    and action facts are kept (action writes are idempotent)."""
+    and action facts are kept (action writes are idempotent). Action facts of conversations that
+    no longer exist in the ledger (retired; for a full rebuild also any unknown one) are retracted."""
     rep = RebuildReport()
     await d.engine.clear(group_id(user_id))
     for table in (d.tables.registry, d.tables.proofs, d.tables.closures):
         await table.delete_user(user_id)
-    convs = [c for c in await d.ledger.conversations(user_id, start or EPOCH, end or d.clock())
-             if c.closedAt]
+    items = await d.ledger.conversations(user_id, start or EPOCH, end or d.clock(),
+                                         include_retired=True)
     latest = {}
-    for c in sorted(convs, key=lambda c: c.revision):
-        latest[c.id] = c
+    for i in sorted((i for i in items if not i.retired and i.conversation and i.conversation.closedAt),
+                    key=lambda i: i.conversation.revision):  # type: ignore[union-attr]
+        latest[i.conversation_id] = i.conversation
+    exists = {i.conversation_id for i in items if not i.retired}
+    retired = {i.conversation_id for i in items if i.retired}
+    if start is None and end is None:
+        await retract_actions_where(d, user_id, lambda cid: cid not in exists)
+    else:
+        await retract_actions_where(d, user_id, lambda cid: cid in retired)
     rep.conversations = len(latest)
     for u in await d.tables.queue.for_user(user_id):
         keep = u.conversation_id in latest and latest[u.conversation_id].revision == u.revision
@@ -97,8 +120,10 @@ async def rebuild(d: Deps, user_id: str, start: datetime | None = None,
             id=WorkUnit.make_id(user_id, c.id, c.revision), user_id=user_id, conversation_id=c.id,
             revision=c.revision, parts=c.parts, reference_time=c.range.start)
         unit.status, unit.attempts = UnitStatus.pending, 0
-        done = (await process(d, unit)).status == UnitStatus.done
-        rep.units_done += done
-        rep.units_failed += not done
+        await d.tables.queue.save(unit)
+        status = (await process(d, unit)).status
+        rep.units_done += status == UnitStatus.done
+        rep.units_skipped += status == UnitStatus.skipped
+        rep.units_failed += status not in (UnitStatus.done, UnitStatus.skipped)
     rep.decisions_applied = await human_wins.reapply(d, user_id)
     return rep

@@ -22,6 +22,15 @@ class Collection(Protocol):
 
     async def delete_where(self, **equals: Any) -> int: ...
 
+    async def put_if_absent(self, doc: dict[str, Any]) -> bool:
+        """Insert only if no document has this `_id`. Atomic. Gives whether it was inserted."""
+        ...
+
+    async def replace_if(self, doc: dict[str, Any], **expect: Any) -> bool:
+        """Replace the document with this `_id` only if it still has all `expect` values.
+        Atomic. Gives whether it was replaced."""
+        ...
+
 
 class MemoryCollection:
     def __init__(self) -> None:
@@ -48,6 +57,20 @@ class MemoryCollection:
         return len(gone)
 
 
+    async def put_if_absent(self, doc: dict[str, Any]) -> bool:
+        if doc["_id"] in self.docs:  # no await between check and write: atomic on one loop
+            return False
+        self.docs[doc["_id"]] = copy.deepcopy(doc)
+        return True
+
+    async def replace_if(self, doc: dict[str, Any], **expect: Any) -> bool:
+        cur = self.docs.get(doc["_id"])
+        if cur is None or any(cur.get(k) != v for k, v in expect.items()):
+            return False
+        self.docs[doc["_id"]] = copy.deepcopy(doc)
+        return True
+
+
 class MongoCollection:
     """Motor collection. Every query the side tables make includes `user_id`; indexes are made
     by `ensure_indexes`."""
@@ -70,3 +93,16 @@ class MongoCollection:
     async def delete_where(self, **equals: Any) -> int:
         res = await self.c.delete_many(equals)
         return res.deleted_count
+
+    async def put_if_absent(self, doc: dict[str, Any]) -> bool:
+        from pymongo.errors import DuplicateKeyError
+
+        try:
+            await self.c.insert_one(doc)
+        except DuplicateKeyError:
+            return False
+        return True
+
+    async def replace_if(self, doc: dict[str, Any], **expect: Any) -> bool:
+        res = await self.c.replace_one({"_id": doc["_id"], **expect}, doc)
+        return res.matched_count == 1

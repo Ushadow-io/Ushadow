@@ -16,12 +16,14 @@ from memory_service.models import (
     MemoryFact,
     RebuildReport,
     SearchFilters,
+    SyncReport,
     WorkUnit,
 )
 from memory_service.schema import Conversation, EvidenceRef, TimeRange
 from memory_service.services import erase as erase_svc
 from memory_service.services import human_wins
 from memory_service.services import ingest as ingest_svc
+from memory_service.services import sync as sync_svc
 from memory_service.services.deps import (
     ACTION_PREFIX,
     ENTITY_PREFIX,
@@ -51,8 +53,9 @@ class MemoryPort:
                      reference_time: datetime | None = None) -> WorkUnit:
         return await ingest_svc.ingest(self.d, _need(user_id), conversation, reference_time)
 
-    async def sync(self, user_id: str, start: datetime, end: datetime) -> list[WorkUnit]:
-        return await ingest_svc.sync(self.d, _need(user_id), start, end)
+    async def sync(self, user_id: str, start: datetime | None = None,
+                   end: datetime | None = None) -> SyncReport:
+        return await sync_svc.sync(self.d, _need(user_id), start, end)
 
     async def run_pending(self, user_id: str) -> list[WorkUnit]:
         return await ingest_svc.run_pending(self.d, _need(user_id))

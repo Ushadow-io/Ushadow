@@ -179,7 +179,8 @@ def build_bundle(event: str, data: Dict[str, Any], facts: Dict[str, Any],
 
     event == conversation.complete : segments + revision from facts (active transcript)
     event == transcript.batch      : segments from the payload; revision = content hash
-    event == transcript.streaming  : segments from the payload; revision "live";
+    event == transcript.streaming  : segments from the payload; revision "live",
+                                     status provisional (every other event: final);
                                      only if the payload says they are on the
                                      "conversation" clock (otherwise no origin is known)
     """
@@ -239,8 +240,8 @@ def build_bundle(event: str, data: Dict[str, Any], facts: Dict[str, Any],
     transcript: Dict[str, Any] = {
         "recordingId": rec_id, "revision": revision, "createdAt": iso(created),
         "speakers": speakers, "segments": segments,
+        "status": "provisional" if event == EVENT_STREAMING else "final",
         "metadata": {"chronicle": {"event": event, "dropped_segments": dropped,
-                                   "provisional": event == EVENT_STREAMING,
                                    "ranges_source": facts.get("ranges_source", "conversation")}},
     }
     model = facts.get("model") or facts.get("provider")
@@ -256,6 +257,15 @@ def build_bundle(event: str, data: Dict[str, Any], facts: Dict[str, Any],
         "transcripts": [transcript],
     }
     return bundle, None
+
+
+def ingest_request(user_id: Optional[str], bundle: Dict[str, Any]
+                   ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """The ledger's POST /ingest body: {userId, bundle}. userId is the Chronicle account that
+    owns the conversation (Conversation.user_id), not a person id. None if it is unknown."""
+    if not user_id:
+        return None, "conversation has no user_id (owner unknown)"
+    return {"userId": str(user_id), "bundle": bundle}, None
 
 
 def segment_key(seg: Dict[str, Any]) -> str:

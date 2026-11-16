@@ -7,7 +7,7 @@ fragments and the decisions next to a Conversation.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 from ledger.llm.structured import ModelStats
 from ledger.schema import Conversation, Fragment, Link, TimeRange
@@ -17,7 +17,7 @@ from ledger.schema import Conversation, Fragment, Link, TimeRange
 JOIN_POLICY = "join-v1"
 SPLIT_POLICY = "split-v1"
 STATE_POLICY = "state-v1"
-CONVERSATION_POLICY = "conv-v1"
+CONVERSATION_POLICY = "conv-v2"  # v2: id anchored on the oldest moment
 DAYPASS_POLICY = "daypass-v1"
 COMPOSER_POLICY = "compose-v1"
 
@@ -67,6 +67,20 @@ class ConversationView(_Strict):
     conversation: Conversation
     fragments: list[Fragment]
     state: ConvState | None = Field(default=None, description="Rolling state at the end")
+    retired: bool = Field(
+        default=False, description="No longer built; carries no title, summary or fragment text"
+    )
+    retiredAt: AwareDatetime | None = Field(default=None, description="Set when retired")
+    replacedBy: list[str] | None = Field(
+        default=None,
+        description="Set when retired: the conversations that now cover its time range "
+        "(empty after an erase that left nothing)",
+    )
+    changedAt: AwareDatetime | None = Field(
+        default=None,
+        description="Last change of revision, retired state, closedAt or composed text; "
+        "the cursor for GET /conversations/changes",
+    )
 
 
 class WhyDecision(_Strict):

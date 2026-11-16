@@ -38,6 +38,7 @@ packages = ["src/memory_service"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+markers = ["mongo: needs a real MongoDB (set MEMORY_TEST_MONGO_URI)"]
 
 [tool.ruff]
 line-length = 110

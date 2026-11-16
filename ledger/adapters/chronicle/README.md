@@ -2,8 +2,10 @@
 
 A Chronicle plugin that lives outside the Chronicle repo. It sends each conversation
 (recording + transcript with absolute times and speaker labels) to the ledger:
-`POST {LEDGER_URL}/ingest` with a `CaptureBundle`. The ledger is idempotent, so a
-repeat send is safe. Chronicle core is not changed.
+`POST {LEDGER_URL}/ingest` with `{"userId": <Chronicle Conversation.user_id>, "bundle": <CaptureBundle>}`.
+`userId` is the account that owns the data (falls back to the plugin context's user); if no
+owner is known, nothing is sent. The ledger is idempotent, so a repeat send is safe.
+Chronicle core is not changed.
 
 ## Mount it
 
@@ -71,9 +73,16 @@ Short answer: the events carry **neither absolute times nor speaker roles**.
   rebuilds Chronicle's own temporary claim, `claim_capture_window(capture_session_id, conversation.started_at, now)`
   (`services/audio_claims.py:439`; same call as `_resolve_live_capture_clock_offset`,
   `workers/conversation_jobs.py:1624-1632`). If that fails, nothing is sent. `started_at` alone is never used.
-- Live segments are provisional: revision `live`, `Transcript.metadata.chronicle.provisional = true`
-  (the schema has no dedicated field). Only new or changed segments are sent (key = start ms).
-  The final transcript comes from `conversation.complete` as a separate revision (the version id).
+- Live segments are provisional: revision `live`, `Transcript.status: provisional`. Only new or
+  changed segments are sent (key = start ms). The final transcript comes from
+  `conversation.complete` as a separate revision (the version id) with `status: final`.
+- `Recording.audio` is not set. Chronicle keeps audio as 10 s Opus chunks per capture session
+  (`models/audio_chunk.py`, keyed `capture_session_id` + `sequence`); the per-conversation file
+  is rendered on request from the conversation's audio claims (`utils/audio_chunk_utils.py`
+  `get_opus_for_conversation`, behind the authenticated route `/api/audio/get_audio/{id}`).
+  No stored file, no stable bytes: not a stable pointer.
+- `CaptureBundle.ownerPersonId` is not set. Chronicle has an account id (`user_id`) and speaker
+  names (`identified_as`), but no person id in the `Speaker.personId` id space.
 - Time is never guessed: a segment with no provable absolute time is dropped; if none is left,
   nothing is sent and the reason is logged (`ledger_adapter: ... nothing sent: <reason>`).
 

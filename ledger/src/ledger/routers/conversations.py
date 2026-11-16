@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from ledger.l2_models import ConversationView, RunRequest, RunResult, WhyView
 from ledger.llm.structured import ModelStats
@@ -20,10 +22,31 @@ Owner = Depends(owner_query)
 async def conversations(
     userId: str = Owner,  # noqa: N803
     rng: TimeRange | None = Depends(time_range),
+    includeRetired: bool = Query(  # noqa: N803
+        default=False, description="Also the retired ones (no text; retiredAt, replacedBy)"
+    ),
     services: Services = Depends(get_services),
 ) -> list[ConversationView]:
     """Active conversations that overlap the range, with fragments and composed text."""
-    return await services.conversations.list(userId, rng)
+    return await services.conversations.list(userId, rng, includeRetired)
+
+
+@router.get("/conversations/changes", response_model=list[ConversationView])
+async def changes(
+    response: Response,
+    userId: str = Owner,  # noqa: N803
+    since: datetime = Query(description="UTC, ISO 8601; items with changedAt after it"),
+    services: Services = Depends(get_services),
+) -> list[ConversationView]:
+    """Conversations (retired too) whose revision, retired state, closedAt or composed text
+    changed after `since`, ordered by changedAt then id. `X-Ledger-Cursor` is the last
+    changedAt in the list (or `since` when the list is empty): pass it as the next `since`."""
+    if since.tzinfo is None:
+        raise HTTPException(422, "since needs a timezone (e.g. Z)")
+    items = await services.conversations.changes(userId, since)
+    cursor = items[-1].changedAt if items else since
+    response.headers["X-Ledger-Cursor"] = cursor.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return items
 
 
 @router.get("/conversations/{conversation_id}/why", response_model=WhyView)

@@ -1,6 +1,7 @@
 """life-datatypes v2 models used by the ledger (vendored, see life_datatypes.py)."""
 
 from ledger.schema.life_datatypes import (
+    AudioRef,
     CaptureBundle,
     CaptureGap,
     Conversation,
@@ -20,9 +21,11 @@ from ledger.schema.life_datatypes import (
     TimeRange,
     Transcript,
     TranscriptCorrection,
+    TranscriptStatus,
 )
 
 __all__ = [
+    "AudioRef",
     "CaptureBundle",
     "CaptureGap",
     "SpeakerRole",
@@ -42,4 +45,5 @@ __all__ = [
     "TimeRange",
     "Transcript",
     "TranscriptCorrection",
+    "TranscriptStatus",
 ]

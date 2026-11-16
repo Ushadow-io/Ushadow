@@ -3,9 +3,10 @@
 For a recording or a time range of it:
 - delete every segment in range, in every transcript revision;
 - delete every correction in range;
-- remove the audio pointer of the recording;
+- remove the audio pointer of the recording (`Recording.audio`, and old metadata keys);
 - delete the moments that overlap the range, then cut the words that remain again;
-- leave a CaptureGap(cause=excluded) and an Erasure record. Neither holds erased content.
+- leave a CaptureGap(cause=excluded, recordingId) and an Erasure record (the counts).
+  Neither holds erased content.
 
 The Erasure record is written first, so an ingest that runs at the same time already
 excludes the range.
@@ -51,6 +52,7 @@ class EraseService:
             sourceId=rec.sourceId,
             range=rng,
             cause=GapCause.excluded,
+            recordingId=rec.id,
         )
         erasure = Erasure(
             id=erasure_id,

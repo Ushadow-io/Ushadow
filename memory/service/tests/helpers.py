@@ -21,7 +21,7 @@ SEG = timedelta(seconds=10)
 
 
 def make_deps(**over) -> Deps:
-    kw = dict(engine=FakeEngine(), tables=memory_tables(), ledger=FakeLedger(),
+    kw = dict(engine=FakeEngine(), tables=memory_tables(), ledger=FakeLedger(), min_owner_words=0,
               actions=InMemoryActionFactStore(), extractor=FakeActionExtractor())
     kw.update(over)
     return Deps(**kw)
@@ -75,3 +75,22 @@ async def everything(deps: Deps) -> str:
         parts.append(json.dumps(c.docs, default=str))
     parts.append(json.dumps([f.model_dump(mode="json") for f in deps.actions.log]))
     return "\n".join(parts).lower()
+
+
+class Clock:
+    """A settable clock shared by the fake ledger and the service."""
+
+    def __init__(self, t: datetime = datetime(2025, 3, 1, 12, 0, tzinfo=UTC)) -> None:
+        self.t = t
+
+    def __call__(self) -> datetime:
+        return self.t
+
+    def advance(self, seconds: float = 1) -> None:
+        self.t += timedelta(seconds=seconds)
+
+
+def clocked_deps(clock: Clock, **over) -> Deps:
+    """Deps whose service clock and fake-ledger change stamps are the same clock; no cursor overlap."""
+    over.setdefault("ledger", FakeLedger(clock=clock))
+    return make_deps(clock=clock, cursor_overlap=timedelta(0), **over)

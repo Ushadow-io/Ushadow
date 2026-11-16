@@ -145,6 +145,24 @@ def test_short_gap_ignored_and_privacy_gap_is_excluded():
     assert [g["cause"] for g in bundle["gaps"]] == ["excluded"]
 
 
+def test_privacy_gap_inside_one_recording_gets_its_recording_id():
+    a = conv_doc("a", "2026-11-14T09:00:00Z", "2026-11-14T10:00:00Z", [seg(0, 1, "x")])
+    privacy = egd.parse_privacy_intervals({"privacy_intervals": [
+        {"source_id": SRC, "state": "excluded", "started_at": "2026-11-14T09:10:00Z", "ended_at": "2026-11-14T09:20:00Z"},
+        {"source_id": SRC, "state": "excluded", "started_at": "2026-11-14T12:00:00Z", "ended_at": "2026-11-14T12:30:00Z"},
+    ]})
+    bundle, _ = bundle_for([a], privacy=privacy)
+    inside, between = bundle["gaps"]
+    assert inside["recordingId"] == "a" and inside["cause"] == "excluded"
+    assert "recordingId" not in between
+
+
+def test_exported_transcripts_are_final_and_carry_no_owner_or_audio():
+    bundle, _ = bundle_for([conv_doc("a", "2026-11-14T09:00:00Z", "2026-11-14T09:10:00Z", [seg(0, 1, "x")])])
+    assert [t["status"] for t in bundle["transcripts"]] == ["final"]
+    assert "ownerPersonId" not in bundle and "audio" not in bundle["recordings"][0]
+
+
 def test_deleted_conversations_are_skipped():
     doc = conv_doc("d", "2026-11-14T09:00:00Z", "2026-11-14T09:01:00Z", [seg(0, 1, "x")], deleted=True)
     _, stats = bundle_for([doc])
@@ -210,7 +228,9 @@ def test_bundle_validates_against_schema():
                  [seg(0, 5, "x", None), seg(600, 610, "y", "Speaker 1", confidence=0.9)], end_reason="websocket_disconnect"),
         conv_doc("b", "2026-11-14T09:00:00Z", "2026-11-14T09:10:00Z", [seg(0, 1, "z")]),
     ]
-    bundle, _ = bundle_for(docs)
+    privacy = [(SRC, dt("2026-11-14T09:02:00Z"), dt("2026-11-14T09:03:00Z"))]
+    bundle, _ = bundle_for(docs, privacy=privacy)
+    assert bundle["gaps"][0]["recordingId"] == "b"
     schema = egd.load_schema(SCHEMA)
     egd.validate_bundle(bundle, schema)
 

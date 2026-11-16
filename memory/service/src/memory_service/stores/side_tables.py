@@ -5,7 +5,7 @@ quote), and erase removes those rows."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from memory_service.models import Decision, UnitStatus, WorkUnit
@@ -197,8 +197,60 @@ class RejectionLog:
         return {d["reason"]: d["count"] for d in await self.c.find(user_id=user_id)}
 
 
+class LeaseStore:
+    """A lease per (user, conversation): owner id + expiry, taken atomically. An expired lease
+    can be taken over, so a crashed worker does not block the unit for ever."""
+
+    def __init__(self, c: Collection) -> None:
+        self.c = c
+
+    async def acquire(self, user_id: str, key: str, owner: str, now: datetime,
+                      ttl: timedelta) -> bool:
+        doc_id = f"{user_id}|{key}"
+        new = {"_id": doc_id, "user_id": user_id, "owner": owner, "expires": iso(now + ttl)}
+        if await self.c.put_if_absent(new):
+            return True
+        cur = await self.c.get(doc_id)
+        if cur is None:  # released between the two calls
+            return await self.c.put_if_absent(new)
+        if parse_iso(cur["expires"]) > now:
+            return False
+        return await self.c.replace_if(new, owner=cur["owner"], expires=cur["expires"])
+
+    async def release(self, user_id: str, key: str, owner: str) -> None:
+        await self.c.delete_where(_id=f"{user_id}|{key}", owner=owner)
+
+
+class SyncCursors:
+    """Per user: the `since` time of the next /conversations/changes call."""
+
+    def __init__(self, c: Collection) -> None:
+        self.c = c
+
+    async def get(self, user_id: str) -> datetime | None:
+        d = await self.c.get(user_id)
+        return parse_iso(d["since"]) if d else None
+
+    async def set(self, user_id: str, since: datetime) -> None:
+        await self.c.put({"_id": user_id, "user_id": user_id, "since": iso(since)})
+
+
+class AppliedErasures:
+    """Ids of ledger erasures already run here. Ids only, no words."""
+
+    def __init__(self, c: Collection) -> None:
+        self.c = c
+
+    async def has(self, user_id: str, erasure_id: str) -> bool:
+        return await self.c.get(f"{user_id}|{erasure_id}") is not None
+
+    async def add(self, user_id: str, erasure_id: str) -> None:
+        await self.c.put({"_id": f"{user_id}|{erasure_id}", "user_id": user_id,
+                          "erasure_id": erasure_id})
+
+
 TABLES = ("work_units", "proofs", "fact_registry", "closures", "erased_ranges", "decisions",
-          "rejections")
+          "rejections", "leases", "sync_cursors", "applied_erasures")
 
 
 @dataclass
@@ -210,6 +262,9 @@ class SideTables:
     erased: ErasedRanges
     decisions: DecisionStore
     rejections: RejectionLog
+    leases: LeaseStore
+    cursors: SyncCursors
+    applied: AppliedErasures
     collections: dict[str, Collection]
 
 
@@ -218,7 +273,9 @@ def _build(colls: dict[str, Collection]) -> SideTables:
         queue=WorkQueue(colls["work_units"]), proofs=ProofStore(colls["proofs"]),
         registry=FactRegistry(colls["fact_registry"]), closures=ClosureStore(colls["closures"]),
         erased=ErasedRanges(colls["erased_ranges"]), decisions=DecisionStore(colls["decisions"]),
-        rejections=RejectionLog(colls["rejections"]), collections=colls)
+        rejections=RejectionLog(colls["rejections"]), leases=LeaseStore(colls["leases"]),
+        cursors=SyncCursors(colls["sync_cursors"]), applied=AppliedErasures(colls["applied_erasures"]),
+        collections=colls)
 
 
 def memory_tables() -> SideTables:
@@ -234,5 +291,6 @@ async def ensure_indexes(db: Any) -> None:
     await db["proofs"].create_index([("user_id", 1), ("fact_id", 1)])
     await db["proofs"].create_index([("user_id", 1), ("recording_id", 1)])
     await db["proofs"].create_index([("user_id", 1), ("conversation_id", 1), ("revision", 1)])
-    for name in ("fact_registry", "closures", "erased_ranges", "decisions", "rejections"):
+    for name in ("fact_registry", "closures", "erased_ranges", "decisions", "rejections",
+                 "applied_erasures"):
         await db[name].create_index([("user_id", 1)])

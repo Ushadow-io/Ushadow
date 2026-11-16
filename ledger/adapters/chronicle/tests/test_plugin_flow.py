@@ -36,7 +36,9 @@ def test_handler_queues_bundle_and_declines(plugin):
     ctx = PluginContext("u1", "conversation.complete", fx.complete_payload_upload())
     assert run(plugin.on_conversation_complete(ctx)) is None
     items = list(plugin._outbox.pending())
-    assert len(items) == 1 and items[0][1]["recordings"][0]["id"] == f"chronicle:{fx.CID}"
+    assert len(items) == 1 and items[0][1]["userId"] == "u1"  # the ledger's {userId, bundle}
+    assert items[0][1]["bundle"]["recordings"][0]["id"] == f"chronicle:{fx.CID}"
+    assert items[0][1]["bundle"]["transcripts"][0]["status"] == "final"
     assert plugin._sender.n == 1
 
 
@@ -49,10 +51,12 @@ def test_streaming_repeats_send_only_new_segments(plugin):
     p["segments"].append({"start": 7.0, "end": 9.0, "text": "Great.", "speaker": "Speaker 0", "words": []})
     run(plugin.on_transcript(PluginContext("u1", "transcript.streaming", p)))
     assert plugin._outbox.count() == 2
-    newest = [b for _, b in plugin._outbox.pending()][-1]
+    newest = [b["bundle"] for _, b in plugin._outbox.pending()][-1]
     segs = newest["transcripts"][0]["segments"]
     assert [s["text"] for s in segs] == ["Great."]
-    assert newest["transcripts"][0]["metadata"]["chronicle"]["provisional"] is True
+    assert newest["transcripts"][0]["status"] == "provisional"
+    assert newest["transcripts"][0]["revision"] == "live"
+    assert "provisional" not in newest["transcripts"][0]["metadata"]["chronicle"]
 
 
 def test_live_claim_gives_exact_times_when_audio_ranges_empty(tmp_path, monkeypatch):

@@ -21,6 +21,8 @@ class Settings:
     actions: str = "memory"  # memory | taskfacts
     taskfacts_database_url: str = field(default="", repr=False)
     extractor: str = "none"  # none | fake | openai
+    min_owner_words: int = 20  # owner gate: fewer owner words in a conversation = skipped
+    lease_seconds: int = 600  # lease on a running work unit
 
 
 def load_settings() -> Settings:
@@ -37,4 +39,6 @@ def load_settings() -> Settings:
         actions=e.get("MEMORY_ACTION_STORE", "memory"),
         taskfacts_database_url=e.get("TASKFACTS_DATABASE_URL", ""),
         extractor=e.get("MEMORY_ACTION_EXTRACTOR", "none"),
+        min_owner_words=int(e.get("MEMORY_MIN_OWNER_WORDS", "20")),
+        lease_seconds=int(e.get("MEMORY_LEASE_SECONDS", "600")),
     )

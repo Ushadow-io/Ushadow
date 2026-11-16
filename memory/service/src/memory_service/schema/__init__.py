@@ -22,6 +22,7 @@ from memory_service.schema.life_datatypes import (
     SpeakerRole,
     TimeRange,
     Transcript,
+    TranscriptCorrection,
 )
 
 __all__ = [
@@ -40,4 +41,5 @@ __all__ = [
     "SpeakerRole",
     "TimeRange",
     "Transcript",
+    "TranscriptCorrection",
 ]

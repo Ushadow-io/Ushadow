@@ -1,8 +1,15 @@
 """Pure: a walked Group -> a Conversation with parts, participants and fragments.
 
-The id is hash(owner, policy, first recording, first line start): a pure function of the
-result, so a fresh ledger and a re-run give the same ids. The digest covers everything the
-build makes (not the composed text and not closedAt); a new digest is a new revision.
+The id is hash(owner, policy, recording, first line start) of the group's ANCHOR slice: the
+slice of the moment created first (Moment.createdAt, then time, then key). A moment is never
+re-cut, so the anchor survives growth: late evidence or a human join at the start adds moments
+created later, and the id stays. It is a pure function of the stored moments, so a replay of
+the same evidence (same order, same clock) gives the same ids, and a fresh one-shot ingest
+anchors on the first moment in time (the v1 rule). An erase re-cuts the moments it touches
+(new createdAt), so an erase inside the anchor moment can move the anchor. When a rebuild
+changes an id, the old conversation is retired with `replacedBy` (persist.py). The digest
+covers everything the build makes (not the composed text and not closedAt); a new digest is a
+new revision.
 """
 
 from __future__ import annotations
@@ -22,7 +29,7 @@ from ledger.schema import (
 from ledger.services.l2.lines import Line, lines_digest
 from ledger.services.l2.rules import LONG_GAP_SECONDS
 from ledger.services.l2.walker import Group, Slice
-from ledger.timeutil import stable_hash, ts
+from ledger.timeutil import stable_hash, ts, utc
 
 QUIET = timedelta(seconds=LONG_GAP_SECONDS)
 
@@ -97,8 +104,15 @@ def _decisions(group: Group) -> list[dict]:
     return rows
 
 
+def _anchor(piece: Slice) -> tuple[str, str, str]:
+    return (ts(utc(piece.view.moment.createdAt)), ts(piece.lines[0].start), piece.view.key)
+
+
 def conversation_id(user_id: str, group: Group) -> str:
-    first = group.lines[0]
+    """The slice of the oldest moment; its first line start keeps two parts of one split
+    moment apart."""
+    anchor = min(group.slices, key=_anchor)
+    first = anchor.lines[0]
     return "conv-" + stable_hash(user_id, CONVERSATION_POLICY, first.recording_id, ts(first.start))
 
 

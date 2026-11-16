@@ -29,6 +29,7 @@ class UnitStatus(StrEnum):
     done = "done"
     failed = "failed"
     superseded = "superseded"
+    skipped = "skipped"  # owner gate: too few owner words; not ingested
 
 
 # ---- episode text (built from ledger transcripts; never stored by us) -------------------------
@@ -100,9 +101,17 @@ class IngestRequest(ApiModel):
 
 
 class SyncRequest(ApiModel):
+    """No range: pull what changed since the saved cursor. With start and end: that range."""
+
     user_id: str = Field(min_length=1)
-    start: AwareDatetime
-    end: AwareDatetime
+    start: AwareDatetime | None = None
+    end: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def _both_or_none(self) -> SyncRequest:
+        if (self.start is None) != (self.end is None):
+            raise ValueError("give both start and end, or neither")
+        return self
 
 
 class UserRequest(ApiModel):
@@ -218,8 +227,17 @@ class EraseReport(ApiModel):
     action_facts_erase_unsupported: int = 0
 
 
+class SyncReport(ApiModel):
+    units: list[WorkUnit] = Field(default_factory=list)
+    retired: int = 0  # conversations undone because the ledger retired them
+    erasures_applied: int = 0  # ledger erasures run here for the first time
+    deferred: int = 0  # work held by another worker; the cursor did not move
+    cursor: AwareDatetime | None = None
+
+
 class RebuildReport(ApiModel):
     conversations: int = 0
     units_done: int = 0
+    units_skipped: int = 0
     units_failed: int = 0
     decisions_applied: int = 0

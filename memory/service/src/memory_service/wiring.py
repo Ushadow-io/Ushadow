@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 from memory_service.actions import (
@@ -64,4 +65,5 @@ def _extractor(s: Settings) -> ActionExtractor:
 async def build_deps(s: Settings) -> Deps:
     return Deps(engine=_engine(s), tables=await _tables(s),
                 ledger=HttpLedgerClient(s.ledger_url, s.ledger_token),
-                actions=await _actions(s), extractor=_extractor(s))
+                actions=await _actions(s), extractor=_extractor(s),
+                min_owner_words=s.min_owner_words, lease_ttl=timedelta(seconds=s.lease_seconds))

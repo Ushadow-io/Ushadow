@@ -10,11 +10,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from ledger.revisions import is_live
+from ledger.revisions import is_provisional
 
 Doc = dict[str, Any]
 
-# life-datatypes Recording has no audio field; adapters put the pointer in metadata.
+# Recording.audio (AudioRef) is the audio pointer. Older senders put it in metadata under
+# one of these keys; erase strips those too (fallback).
 AUDIO_POINTER_KEYS = frozenset(
     {
         "audioUri",
@@ -29,7 +30,7 @@ AUDIO_POINTER_KEYS = frozenset(
     }
 )
 
-_RECORDING_FILL = ("modality", "origin", "startReason", "endReason", "contentHash")
+_RECORDING_FILL = ("modality", "origin", "startReason", "endReason", "contentHash", "audio")
 
 
 def _fill(old: Any, new: Any) -> tuple[bool, Any]:
@@ -91,9 +92,16 @@ def grow_live_header(old: Doc, new: Doc) -> Doc | None:
     return merged
 
 
+def _provisional(header: Doc) -> bool:
+    return is_provisional(header.get("revision"), header.get("status"))
+
+
 def grow_transcript_header(old: Doc, new: Doc) -> Doc | None:
-    """Header = Transcript without segments. Keeps the first createdAt and metadata."""
-    if is_live(old.get("revision")):
+    """Header = Transcript without segments. Keeps the first createdAt and metadata.
+    A revision never switches between provisional and final (a final is a new revision)."""
+    if _provisional(old) != _provisional(new):
+        return None
+    if _provisional(old):
         return grow_live_header(old, new)
     ok, model = _fill(old.get("model"), new.get("model"))
     if not ok:

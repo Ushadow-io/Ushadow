@@ -4,10 +4,11 @@ Keys: recording = owner + id; transcript = owner + recording + revision; segment
 recording + revision + time range; correction, gap, link = owner + id. The same item sent twice
 is one record. A different body under a stored key is refused, never written.
 
-Live transcripts: revision `live` is provisional. While the recording has no final revision,
-live segments may be appended and a live segment with the same start may be replaced (the one
-overwrite path, SegmentStore -> EvidenceStore.put_provisional). Once a final revision exists,
-live posts are no-ops (counted as `frozen`) and the final is the current revision.
+Provisional transcripts (`status: provisional`, see revisions.is_provisional): while the
+recording has no final revision, provisional segments may be appended and one with the same
+start may be replaced (the one overwrite path, SegmentStore -> EvidenceStore.put_provisional).
+Once a final revision exists, provisional posts are no-ops (counted as `frozen`) and the final
+is the current revision. A second provisional revision of a recording is refused (rule 7).
 
 Erased ranges are applied to incoming evidence before it is compared and stored, so a
 re-ingest or a replay does not bring erased words back.
@@ -18,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Awaitable
 
 from ledger.models import IngestRequest, IngestResult, Refusal, TypeCounts
-from ledger.revisions import finals, is_live, pick_current
+from ledger.revisions import draft, finals, pick_current, provisional
 from ledger.schema import CaptureBundle, Recording, TimeRange, Transcript
 from ledger.services.duplicate_service import DuplicateService
 from ledger.services.moment_service import MomentService
@@ -111,10 +112,16 @@ class IngestService:
         if await self._s.recordings.load(run.user_id, transcript.recordingId) is None:
             run.refuse(counts, ref, "unknown recording; send the Recording first")
             return
-        if is_live(transcript.revision) and await self._has_final(run, transcript.recordingId):
-            counts.frozen += 1  # live is frozen once a final revision exists
-            run.result.segments.frozen += len(transcript.segments)
-            return
+        if provisional(transcript):
+            headers = await self._s.transcripts.revisions(run.user_id, transcript.recordingId)
+            if finals(headers):
+                counts.frozen += 1  # the draft is frozen once a final revision exists
+                run.result.segments.frozen += len(transcript.segments)
+                return
+            other = draft(headers)
+            if other is not None and other.revision != transcript.revision:
+                run.refuse(counts, ref, "a recording has at most one provisional revision")
+                return
         if not await run.save(counts, ref, self._s.transcripts.save(run.user_id, transcript)):
             return
         erased = await self._erased(run, transcript.recordingId)
@@ -126,9 +133,6 @@ class IngestService:
             write = self._s.segments.save(run.user_id, transcript, seg)
             await run.save(seg_counts, ("segment", seg.id), write)
         run.touched.add(transcript.recordingId)
-
-    async def _has_final(self, run: _Run, recording_id: str) -> bool:
-        return bool(finals(await self._s.transcripts.revisions(run.user_id, recording_id)))
 
     async def _set_pointer(self, run: _Run, recording_id: str) -> None:
         """currentTranscriptRevision: the named final, else the newest final, else live."""

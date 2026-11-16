@@ -85,6 +85,15 @@ class LedgerAdapterPlugin(BasePlugin):
         while len(self._sent) > 200:  # bounded: drop the oldest conversation
             self._sent.pop(next(iter(self._sent)))
 
+    def _request(self, event: str, data: Dict[str, Any], facts: Dict[str, Any], context: Any):
+        """(bundle, {userId, bundle}, reason). The owner is the conversation's account."""
+        bundle, reason = mapping.build_bundle(event, data, facts, self.owner_names)
+        if bundle is None:
+            return None, None, reason
+        owner = facts.get("user_id") or getattr(context, "user_id", None)
+        request, reason = mapping.ingest_request(owner, bundle)
+        return bundle, request, reason
+
     async def _handle(self, context: PluginContext) -> Optional[PluginResult]:
         try:
             event = str(getattr(context.event, "value", context.event))
@@ -112,8 +121,8 @@ class LedgerAdapterPlugin(BasePlugin):
                     if not delta:
                         continue
                     item_data = {**item_data, "segments": delta}
-                bundle, reason = mapping.build_bundle(event, item_data, facts, self.owner_names)
-                if bundle is None:
+                bundle, request, reason = self._request(event, item_data, facts, context)
+                if request is None:
                     logger.info("ledger_adapter: %s %s: nothing sent: %s", event, cid[:12], reason)
                     continue
                 rec = bundle["recordings"][0]["id"]
@@ -123,10 +132,10 @@ class LedgerAdapterPlugin(BasePlugin):
                     first = bundle["transcripts"][0]["segments"][0]["id"]
                     last = bundle["transcripts"][0]["segments"][-1]["id"]
                     self._remember(cid, new_state)
-                    self._outbox.put(f"{rec}|{rev}|{first}|{last}|{len(bundle['transcripts'][0]['segments'])}", bundle)
+                    self._outbox.put(f"{rec}|{rev}|{first}|{last}|{len(bundle['transcripts'][0]['segments'])}", request)
                 else:
                     self._sent.pop(cid, None)  # final data supersedes the live state
-                    self._outbox.put(f"{rec}|{rev}", bundle)
+                    self._outbox.put(f"{rec}|{rev}", request)
                 queued += 1
             if queued:
                 self._sender.notify()

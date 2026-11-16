@@ -51,9 +51,8 @@ async def ingest(req: IngestRequest, p: Principal = Depends(require_service),
 
 @router.post("/sync")
 async def sync(req: SyncRequest, p: Principal = Depends(require_service),
-               mp: MemoryPort = Depends(port)) -> list[dict[str, Any]]:
-    units = await mp.sync(authorize_user(p, req.user_id), req.start, req.end)
-    return [_dump(u) for u in units]
+               mp: MemoryPort = Depends(port)) -> dict[str, Any]:
+    return _dump(await mp.sync(authorize_user(p, req.user_id), req.start, req.end))
 
 
 @router.post("/queue/run")

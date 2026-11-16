@@ -17,12 +17,38 @@ from ledger.timeutil import utc
 EDGE = timedelta(seconds=1)
 
 
+_TEXT = ("title", "summary", "citations")
+
+
+def _when(value: str | None) -> datetime | None:
+    return datetime.fromisoformat(value) if value else None
+
+
 def _view(doc: dict) -> ConversationView:
+    if not doc.get("active", True):
+        return _retired_view(doc)
     state = doc.get("state")
     return ConversationView(
         conversation=Conversation.model_validate(doc["body"]),
         fragments=[Fragment.model_validate(f) for f in doc.get("fragments", [])],
         state=ConvState.model_validate(state) if state else None,
+        changedAt=_when(doc.get("changedAt")),
+    )
+
+
+def _retired_view(doc: dict) -> ConversationView:
+    """No text: no title, summary, citations, state or fragment topics (the store already
+    removed them; this makes sure)."""
+    body = {k: v for k, v in doc["body"].items() if k not in _TEXT}
+    fragments = [{**f, "topic": None, "summary": None} for f in doc.get("fragments", [])]
+    return ConversationView(
+        conversation=Conversation.model_validate(body),
+        fragments=[Fragment.model_validate(f) for f in fragments],
+        state=None,
+        retired=True,
+        retiredAt=_when(doc.get("retiredAt")),
+        replacedBy=list(doc.get("replacedBy") or []),
+        changedAt=_when(doc.get("changedAt")),
     )
 
 
@@ -34,8 +60,15 @@ class ConversationService:
         self.pipeline = pipeline
         self._decisions, self._erase = l1
 
-    async def list(self, user_id: str, rng: TimeRange | None) -> list[ConversationView]:
-        return [_view(doc) for doc in await self._s.conversations.active(user_id, rng)]
+    async def list(
+        self, user_id: str, rng: TimeRange | None, include_retired: bool = False
+    ) -> list[ConversationView]:
+        docs = await self._s.conversations.listing(user_id, rng, include_retired)
+        return [_view(doc) for doc in docs]
+
+    async def changes(self, user_id: str, since: datetime) -> list[ConversationView]:
+        """Conversations (retired too) whose changedAt is after `since`, oldest change first."""
+        return [_view(doc) for doc in await self._s.conversations.changes(user_id, since)]
 
     async def why(self, user_id: str, conv_id: str) -> WhyView | None:
         doc = await self._s.conversations.load(user_id, conv_id)

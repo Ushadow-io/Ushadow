@@ -47,7 +47,7 @@ class Pipeline:
         self._walker, self._composer = parts
         self._clock = clock
         self._views = MomentViews(stores)
-        self._persist = Persister(stores)
+        self._persist = Persister(stores, clock)
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     async def run(self, user_id: str, rng: TimeRange) -> RunResult:

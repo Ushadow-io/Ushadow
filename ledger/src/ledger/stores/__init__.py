@@ -62,7 +62,10 @@ _INDEXES: dict[str, list[list[tuple[str, int]]]] = {
     ],
     "moments": [[("userId", 1), ("recordingId", 1), ("start", 1)], [("userId", 1), ("start", 1)]],
     "erasures": [[("userId", 1), ("recordingId", 1)]],
-    "conversations": [[("userId", 1), ("active", 1), ("start", 1)]],
+    "conversations": [
+        [("userId", 1), ("active", 1), ("start", 1)],
+        [("userId", 1), ("changedAt", 1)],
+    ],
     "states": [[("userId", 1), ("start", 1)]],
 }
 

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
+
+from pymongo.errors import DuplicateKeyError
+
 from ledger.models import Erasure, Moment, MomentStatus
 from ledger.schema import Link, TimeRange
 from ledger.stores.base import Doc, DocStore, EvidenceStore, Outcome
@@ -57,16 +61,18 @@ class MomentStore(DocStore):
         if existing is not None:
             return Outcome.present
         body = moment.model_dump(mode="json")
-        await self._c.insert_one(
-            {
-                "_id": moment.key,
-                "userId": moment.userId,
-                "recordingId": moment.recordingId,
-                "start": ts(moment.range.start),
-                "end": ts(moment.range.end),
-                "body": body,
-            }
-        )
+        doc = {
+            "_id": moment.key,
+            "userId": moment.userId,
+            "recordingId": moment.recordingId,
+            "start": ts(moment.range.start),
+            "end": ts(moment.range.end),
+            "body": body,
+        }
+        try:
+            await self._c.insert_one(doc)
+        except DuplicateKeyError:  # a concurrent ingest cut the same moment first
+            return Outcome.present
         return Outcome.created
 
     async def list(
@@ -107,16 +113,17 @@ class MomentStore(DocStore):
 
 class ErasureStore(DocStore):
     async def add(self, erasure: Erasure) -> None:
-        await self._c.insert_one(
-            {
-                "_id": erasure.id,
-                "userId": erasure.userId,
-                "recordingId": erasure.recordingId,
-                "start": ts(erasure.range.start),
-                "end": ts(erasure.range.end),
-                "body": erasure.model_dump(mode="json"),
-            }
-        )
+        """Insert once. The same erase twice at the same time: the first record stays."""
+        doc = {
+            "_id": erasure.id,
+            "userId": erasure.userId,
+            "recordingId": erasure.recordingId,
+            "start": ts(erasure.range.start),
+            "end": ts(erasure.range.end),
+            "body": erasure.model_dump(mode="json"),
+        }
+        with contextlib.suppress(DuplicateKeyError):
+            await self._c.insert_one(doc)
 
     async def for_recording(self, user_id: str, recording_id: str) -> list[Erasure]:
         docs = await self.find(

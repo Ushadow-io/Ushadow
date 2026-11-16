@@ -43,6 +43,25 @@ def test_streaming_uses_payload_segments_and_live_revision():
     assert "endReason" not in b["recordings"][0]
 
 
+def test_status_provisional_for_live_and_final_otherwise_without_owner_or_audio():
+    live, _ = build(m.EVENT_STREAMING, fx.streaming_payload())
+    final, _ = build(m.EVENT_COMPLETE, fx.complete_payload_upload())
+    assert live["transcripts"][0]["status"] == "provisional"
+    assert final["transcripts"][0]["status"] == "final"
+    for b in (live, final):
+        assert "provisional" not in b["transcripts"][0]["metadata"]["chronicle"]
+        # Chronicle has no person id and no stable audio file pointer: both left out
+        assert "ownerPersonId" not in b and "audio" not in b["recordings"][0]
+
+
+def test_ingest_request_wraps_the_bundle_with_the_account_owner():
+    b, _ = build(m.EVENT_COMPLETE, fx.complete_payload_upload())
+    req, why = m.ingest_request("u1", b)
+    assert why is None and req == {"userId": "u1", "bundle": b}
+    req, why = m.ingest_request(None, b)
+    assert req is None and "user_id" in why
+
+
 def test_streaming_on_capture_session_clock_is_refused():
     p = fx.streaming_payload()
     p["timestamp_clock"] = "capture_session"

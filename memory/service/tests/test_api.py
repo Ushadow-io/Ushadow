@@ -86,8 +86,6 @@ async def test_ledger_client_sends_bearer_token_and_user():
 
     def handler(req: httpx.Request) -> httpx.Response:
         seen.append(req)
-        if req.url.path == "/conversations":
-            return httpx.Response(200, json={"conversations": []})
         return httpx.Response(200, json=[])
 
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))

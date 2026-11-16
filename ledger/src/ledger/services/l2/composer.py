@@ -67,6 +67,7 @@ class Composer:
         if answer.unavailable:
             return False
         fields: dict = {"composedRevision": revision}
+        fields["changedAt"] = await ctx.stores.conversations.next_change(ctx.user_id, ctx.clock())
         if answer.value is not None:  # ok, or the last answer with its bad citations dropped
             value: ComposeAnswer = answer.value
             body = {

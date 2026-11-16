@@ -21,7 +21,7 @@ uv run ledger/tools/export_golden_days.py --date 2026-11-14 --user <user-id> --t
 ```
 
 Env vars: `CHRONICLE_TOKEN` (REST), `CHRONICLE_URL`, `CHRONICLE_MONGO_URI`, `CHRONICLE_MONGO_DB`,
-`LIFE_DATATYPES_SCHEMA` (default `~/repos/life-datatypes/schema/conversation.json`, branch `schema-v2`),
+`LIFE_DATATYPES_SCHEMA` (default `~/repos/life-datatypes/schema/conversation.json`, branch `main`, commit `5937cd4` or later),
 `LEDGER_TZ`. Repeat `--date` for several days. `--owner-name` marks a speaker name as `role=owner`.
 
 Outputs per day: `<date>.bundle.json` (CaptureBundle, validated against the schema before writing;
@@ -35,10 +35,13 @@ Files are sorted-key JSON, so the same input gives byte-identical output.
   Recordings that overlap the day (in `--tz`) are included whole, also when they cross midnight.
 - Segment times in Chronicle are seconds from the start of the conversation's audio. They are made
   absolute by laying `audio_ranges` end to end (their absolute times come from `audio_chunks.captured_at`).
+- Every exported transcript has `status: final` (Chronicle's stored version, not a live draft).
+- `Recording.audio` and `CaptureBundle.ownerPersonId` are left out: Chronicle has no stable audio
+  file pointer (audio is rendered on request from chunks) and no person id (only the account id).
 - A missing speaker becomes label `unknown`. Speaker roles are `unknown` unless `--owner-name` matches.
 - Gaps are written only when the cause is known: previous recording ended by `websocket_disconnect`
   (`disconnected`), `user_stopped`/`close_requested` (`paused`), or a Chronicle privacy interval
-  (`excluded`). Gaps shorter than `--min-gap-seconds` (60) are ignored. The count of skipped unknown-cause gaps is printed.
+  (`excluded`; a privacy gap that lies inside one recording gets that `recordingId`). Gaps shorter than `--min-gap-seconds` (60) are ignored. The count of skipped unknown-cause gaps is printed.
 - REST mode fetches each conversation detail; to keep this fast, conversations created more than
   `--created-slack-hours` (48) before the day starts are skipped. Use a negative value to fetch all.
 

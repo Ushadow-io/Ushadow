@@ -20,9 +20,10 @@ def is_erased(rng: TimeRange, erased: Sequence[TimeRange]) -> bool:
 
 
 def strip_audio_pointer(rec: Recording) -> tuple[Recording, bool]:
-    """Remove the audio pointer. The ledger cannot cut the audio file, so a partial erase
-    drops the pointer for the whole recording."""
+    """Remove the audio pointer: `Recording.audio` (the AudioRef), and as a fallback the
+    metadata keys older senders used. The ledger cannot cut the audio file, so a partial erase
+    drops the pointer for the whole recording. The rest of the record stays."""
     meta = rec.metadata or {}
     kept = {k: v for k, v in meta.items() if k not in AUDIO_POINTER_KEYS}
-    removed = len(kept) != len(meta)
-    return rec.model_copy(update={"metadata": kept or None}), removed
+    removed = rec.audio is not None or len(kept) != len(meta)
+    return rec.model_copy(update={"audio": None, "metadata": kept or None}), removed

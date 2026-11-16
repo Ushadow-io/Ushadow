@@ -114,8 +114,8 @@ async def test_failed_unit_is_retried_without_duplicates(deps, port):
 
 async def test_sync_pulls_closed_conversations_from_ledger(deps, port):
     seed(deps, USER_A, "c1", T0, LINES)
-    units = await port.sync(USER_A, T0 - timedelta(hours=1), T0 + timedelta(hours=1))
+    units = (await port.sync(USER_A, T0 - timedelta(hours=1), T0 + timedelta(hours=1))).units
     assert [u.status for u in units] == [UnitStatus.done]
-    again = await port.sync(USER_A, T0 - timedelta(hours=1), T0 + timedelta(hours=1))
+    again = (await port.sync(USER_A, T0 - timedelta(hours=1), T0 + timedelta(hours=1))).units
     assert [(u.status, u.attempts) for u in again] == [(UnitStatus.done, 1)]
     assert len(await deps.engine.facts(group_id(USER_A))) == 3

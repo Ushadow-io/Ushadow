@@ -1,9 +1,11 @@
 """Save built conversations. Same digest: keep (and keep the composed text). New digest: the
-next revision, composed text cleared. Not built any more: retired, text removed."""
+next revision, composed text cleared. Not built any more: retired, text removed, and
+`replacedBy` = the conversations of this build that overlap its time range (empty when none
+does, e.g. after an erase). Every such change sets `changedAt` (stores/l2.py next_change)."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 
 from pydantic import AwareDatetime, TypeAdapter
@@ -36,9 +38,17 @@ def _doc(user_id: str, built: Built, revision: int, closed: datetime | None) -> 
     }
 
 
+def _overlaps(doc: dict, other: dict) -> bool:
+    return doc["start"] < other["end"] and other["start"] < doc["end"]
+
+
 class Persister:
-    def __init__(self, stores: Stores) -> None:
+    def __init__(self, stores: Stores, clock: Callable[[], datetime]) -> None:
         self._s = stores
+        self._clock = clock
+
+    async def _change(self, user_id: str) -> str:
+        return await self._s.conversations.next_change(user_id, self._clock())
 
     async def save(
         self, user_id: str, built: Sequence[tuple[Built, datetime | None]], scope: TimeRange
@@ -58,6 +68,7 @@ class Persister:
                 continue
             revision = old["revision"] + 1 if old else 1
             doc = {"_id": store.key(user_id, conv_id), **_doc(user_id, item, revision, closed)}
+            doc["changedAt"] = await self._change(user_id)
             await store.put(doc)
             docs[conv_id] = doc
             counts.created += old is None
@@ -65,7 +76,8 @@ class Persister:
         start, end = ts(scope.start), ts(scope.end)
         for old in await store.active(user_id, scope):
             if old["convId"] not in docs and start <= old["start"] < end:
-                await store.retire(old)
+                by = sorted(i for i, d in docs.items() if _overlaps(old, d))
+                await store.retire(old, await self._change(user_id), by)
                 counts.retired += 1
         return counts, docs
 
@@ -74,4 +86,5 @@ class Persister:
         if doc["body"].get("closedAt") == value:
             return
         body = {**doc["body"], "closedAt": value}
-        await self._s.conversations.set_fields(user_id, doc["convId"], {"body": body})
+        fields = {"body": body, "changedAt": await self._change(user_id)}
+        await self._s.conversations.set_fields(user_id, doc["convId"], fields)

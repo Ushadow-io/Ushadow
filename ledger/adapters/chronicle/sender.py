@@ -32,8 +32,9 @@ def make_http_post(ledger_url: str, timeout: float, token: str = "") -> PostFn:
         if r.status_code < 300:
             return True
         if 400 <= r.status_code < 500 and r.status_code not in (408, 429):
-            # Retrying cannot fix a rejected bundle. Surface loudly, drop it.
-            logger.error("ledger_adapter: ledger rejected bundle (%s): %s", r.status_code, r.text[:300])
+            # Retrying cannot fix a rejected bundle. Surface loudly, drop it. The answer body is
+            # not logged: a validation error echoes the input, i.e. transcript text.
+            logger.error("ledger_adapter: ledger rejected bundle (%s)", r.status_code)
             return True
         logger.warning("ledger_adapter: ledger returned %s", r.status_code)
         return False

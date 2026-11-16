@@ -2,13 +2,17 @@
 - a done unit is never run again (ingest twice = one set of facts);
 - a new revision first unwinds the old one (episode removed, the facts it closed reopened, its
   proofs and action facts retracted), so revisions never leave duplicates;
-- a retry after a crash unwinds its own half-written episode first.
+- a retry after a crash unwinds its own half-written episode first;
+- a lease per (user, conversation) keeps two workers off the same unit; an expired lease can be
+  taken over;
+- a conversation whose owner said too few words is `skipped`, with a counted reason.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import datetime
 
 from memory_service.actions import SUBJECT_KIND, ActionFactDraft, ActionSubject
 from memory_service.engine import EngineFact
@@ -21,17 +25,26 @@ from memory_service.services.episode import (
     build_lines,
     locate_fact,
     locate_quote,
+    owner_gate,
+    pick_transcript,
     verify,
 )
 from memory_service.stores import Proof
 from memory_service.textutil import digest, group_id, norm
 
 log = logging.getLogger("memory.ingest")
-EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 class NotClosed(ValueError):
     """Only closed conversations are ingested."""
+
+
+class NoFinalTranscript(RuntimeError):
+    """A recording has transcripts but none is final yet; the unit waits and is retried."""
+
+
+class LeaseBusy(RuntimeError):
+    """Another worker holds the lease on this conversation."""
 
 
 # ---- knowledge -----------------------------------------------------------------------------------
@@ -108,6 +121,17 @@ async def _retract_unit_actions(d: Deps, unit: WorkUnit) -> None:
             await d.actions.retract(a, source="agent")
 
 
+async def retract_actions_where(d: Deps, user_id: str, gone: Callable[[str], bool]) -> int:
+    """Retract the standing action facts of conversations for which `gone(conversation id)`."""
+    n = 0
+    for a in await d.actions.standing(action_scope(user_id)):
+        cid = (a.value.get("conversation") or {}).get("id")
+        if cid is not None and gone(cid):  # a person's own fact names no conversation: kept
+            await d.actions.retract(a, source="agent")
+            n += 1
+    return n
+
+
 # ---- unwinding -----------------------------------------------------------------------------------
 
 
@@ -134,15 +158,30 @@ async def unwind_unit(d: Deps, unit: WorkUnit, retract_actions: bool) -> int:
 # ---- running a unit ------------------------------------------------------------------------------
 
 
-async def _run(d: Deps, unit: WorkUnit) -> None:
+async def _context(d: Deps, unit: WorkUnit) -> EpisodeContext:
     user = unit.user_id
     recs = sorted({p.recordingId for p in unit.parts})
-    ctx = EpisodeContext(unit=unit, transcripts={r: await d.ledger.transcripts(user, r) for r in recs},
-                         erased=await d.tables.erased.for_user(user))
+    transcripts = {r: await d.ledger.transcripts(user, r) for r in recs}
+    if any(ts and pick_transcript(ts) is None for ts in transcripts.values()):
+        raise NoFinalTranscript(unit.episode_key)
+    corrections = {r: await d.ledger.corrections(user, r) for r in recs if transcripts[r]}
+    return EpisodeContext(unit=unit, transcripts=transcripts, corrections=corrections,
+                          erased=await d.tables.erased.for_user(user))
+
+
+async def _run(d: Deps, unit: WorkUnit) -> UnitStatus:
+    user = unit.user_id
+    ctx = await _context(d, unit)
     ctx.lines = build_lines(ctx)
     unit.facts_written = unit.facts_rejected = unit.actions_written = unit.actions_rejected = 0
     if not ctx.lines:
-        return
+        return UnitStatus.done
+    gate = owner_gate(ctx, d.min_owner_words) if d.min_owner_words > 0 else "ok"
+    if gate == "owner_unknown":  # no speaker is the owner: the gate cannot apply, do not skip
+        await d.tables.rejections.count(user, "owner_unknown")
+    elif gate == "below":
+        await d.tables.rejections.count(user, "conversation_below_owner_words")
+        return UnitStatus.skipped
     episode = EpisodeInput(name=unit.episode_key, reference_time=unit.reference_time, lines=ctx.lines)
     res = await d.engine.add_episode(group_id(user), episode)
     unit.engine_episode_id = res.engine_episode_id
@@ -150,6 +189,7 @@ async def _run(d: Deps, unit: WorkUnit) -> None:
     await d.tables.closures.add(user, unit.episode_key, res.closed)
     unit.facts_written, unit.facts_rejected = await _attach_proofs(d, ctx, res.facts)
     unit.actions_written, unit.actions_rejected = await _extract_actions(d, ctx, episode)
+    return UnitStatus.done
 
 
 async def _supersede_older(d: Deps, unit: WorkUnit) -> None:
@@ -160,16 +200,19 @@ async def _supersede_older(d: Deps, unit: WorkUnit) -> None:
             await d.tables.queue.save(old)
 
 
-async def process(d: Deps, unit: WorkUnit) -> WorkUnit:
+async def take_lease(d: Deps, user_id: str, conversation_id: str) -> bool:
+    return await d.tables.leases.acquire(user_id, conversation_id, d.worker_id, d.clock(), d.lease_ttl)
+
+
+async def _execute(d: Deps, unit: WorkUnit) -> WorkUnit:
     unit.status, unit.attempts, unit.last_error = UnitStatus.running, unit.attempts + 1, None
     await d.tables.queue.save(unit)
     try:
         await _supersede_older(d, unit)
         if unit.engine_episode_id:  # a retry: remove the half-written episode first
             await unwind_unit(d, unit, retract_actions=False)
-        await _run(d, unit)
+        unit.status = await _run(d, unit)
         await human_wins.reapply(d, unit.user_id)
-        unit.status = UnitStatus.done
     except Exception as exc:  # noqa: BLE001 - saved on the unit; the message can quote text
         unit.status, unit.last_error = UnitStatus.failed, type(exc).__name__
         log.warning("ingest failed conversation=%s revision=%s error=%s",
@@ -178,13 +221,33 @@ async def process(d: Deps, unit: WorkUnit) -> WorkUnit:
     return unit
 
 
+async def process(d: Deps, unit: WorkUnit) -> WorkUnit:
+    """Run one unit under the conversation's lease. Without the lease the unit is left (and saved
+    as pending when new) for a later run_pending. A unit another worker finished meanwhile is
+    returned as stored, not run again: callers that want a re-run save it as pending first."""
+    if not await take_lease(d, unit.user_id, unit.conversation_id):
+        stored = await d.tables.queue.get(unit.id)
+        if stored is None:
+            unit.status = UnitStatus.pending
+            await d.tables.queue.save(unit)
+        return stored or unit
+    try:
+        stored = await d.tables.queue.get(unit.id)
+        if stored and stored.status in (UnitStatus.done, UnitStatus.superseded, UnitStatus.skipped):
+            return stored
+        return await _execute(d, stored or unit)
+    finally:
+        await d.tables.leases.release(unit.user_id, unit.conversation_id, d.worker_id)
+
+
 async def ingest(d: Deps, user_id: str, conv: Conversation,
                  reference_time: datetime | None = None) -> WorkUnit:
     if conv.closedAt is None:
         raise NotClosed(f"conversation {conv.id} is not closed")
     unit_id = WorkUnit.make_id(user_id, conv.id, conv.revision)
     existing = await d.tables.queue.get(unit_id)
-    if existing and existing.status in (UnitStatus.done, UnitStatus.superseded, UnitStatus.running):
+    if existing and existing.status in (UnitStatus.done, UnitStatus.superseded,
+                                        UnitStatus.running, UnitStatus.skipped):
         return existing
     unit = existing or WorkUnit(id=unit_id, user_id=user_id, conversation_id=conv.id,
                                 revision=conv.revision, parts=conv.parts,
@@ -199,14 +262,8 @@ async def ingest(d: Deps, user_id: str, conv: Conversation,
 
 async def run_pending(d: Deps, user_id: str) -> list[WorkUnit]:
     """Retry pending, failed and stuck-running units (below max_attempts), oldest revision first.
-    Assumes ONE worker per user: there is no lease on `running` yet."""
+    Safe with several workers: a unit whose conversation another worker holds is left alone."""
     retry = (UnitStatus.pending, UnitStatus.failed, UnitStatus.running)
     units = [u for u in await d.tables.queue.for_user(user_id)
              if u.status in retry and u.attempts < d.max_attempts]
     return [await process(d, u) for u in sorted(units, key=lambda u: (u.conversation_id, u.revision))]
-
-
-async def sync(d: Deps, user_id: str, start: datetime, end: datetime) -> list[WorkUnit]:
-    """Pull closed conversations from the ledger and ingest each (conversation, revision) once."""
-    convs = [c for c in await d.ledger.conversations(user_id, start, end) if c.closedAt]
-    return [await ingest(d, user_id, c) for c in sorted(convs, key=lambda c: (c.id, c.revision))]

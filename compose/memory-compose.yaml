@@ -58,6 +58,10 @@ services:
       - MEMORY_ACTION_EXTRACTOR=${MEMORY_ACTION_EXTRACTOR:-openai}
       - MEMORY_ACTION_MODEL=${MEMORY_ACTION_MODEL:-}
       - MEMORY_ACTION_STORE=${MEMORY_ACTION_STORE:-memory}
+      # Owner gate: skip conversations where the owner said fewer words than this (0 = off).
+      - MEMORY_MIN_OWNER_WORDS=${MEMORY_MIN_OWNER_WORDS:-20}
+      # Lease on a running work unit, seconds.
+      - MEMORY_LEASE_SECONDS=${MEMORY_LEASE_SECONDS:-600}
       - TASKFACTS_DATABASE_URL=${TASKFACTS_DATABASE_URL:-}
     networks:
       infra-network:

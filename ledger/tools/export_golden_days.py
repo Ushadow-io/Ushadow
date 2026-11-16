@@ -313,6 +313,7 @@ def map_conversation(
         "createdAt": iso(conv.revision_created_at or conv.created_at or rec_end),
         "speakers": [speakers[k] for k in sorted(speakers)],
         "segments": segments,
+        "status": "final",  # an export reads Chronicle's stored (closed) version
     }
     if conv.model:
         transcript["model"] = str(conv.model)
@@ -322,29 +323,63 @@ def map_conversation(
 # -------------------------------------------------------------------------- gaps
 
 
-def _gap(source_id: str, start: datetime, end: datetime, cause: str) -> dict[str, Any]:
+def _gap(source_id: str, start: datetime, end: datetime, cause: str,
+         recording_id: str | None = None) -> dict[str, Any]:
     key = f"{source_id}|{iso(start)}|{iso(end)}|{cause}"
-    return {
+    gap = {
         "id": "gap-" + hashlib.sha1(key.encode()).hexdigest()[:16],
         "sourceId": source_id,
         "range": {"start": iso(start), "end": iso(end)},
         "cause": cause,
     }
+    if recording_id:
+        gap["recordingId"] = recording_id  # the gap is inside this recording
+    return gap
+
+
+def _inside(items: list[tuple[str, datetime, datetime, str | None, str]], source_id: str | None,
+            lo: datetime, hi: datetime) -> tuple[str, str] | None:
+    """(source, recording id) of the one recording that holds [lo, hi]; None if not one."""
+    hits = [(src, rec) for src, start, end, _r, rec in items
+            if start <= lo and hi <= end and source_id in (None, src)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _privacy_gaps(items: list[tuple[str, datetime, datetime, str | None, str]],
+                  day: tuple[datetime, datetime],
+                  privacy: Iterable[tuple[str | None, datetime, datetime]],
+                  sources: list[str]) -> list[dict[str, Any]]:
+    """Excluded gaps; one inside a single recording gets that recording's id and source."""
+    out = []
+    for source_id, start, end in privacy:
+        lo, hi = max(start, day[0]), min(end, day[1])
+        if hi <= lo:
+            continue
+        holder = _inside(items, source_id, lo, hi)
+        if holder:
+            out.append(_gap(holder[0], lo, hi, "excluded", holder[1]))
+        else:
+            fallback = source_id or (sources[0] if sources else "unknown")
+            out.append(_gap(fallback, lo, hi, "excluded"))
+    return out
 
 
 def build_gaps(
-    items: Iterable[tuple[str, datetime, datetime, str | None]],
+    items: Iterable[tuple[str, datetime, datetime, str | None, str]],
     day: tuple[datetime, datetime],
     min_gap_s: float,
     privacy: Iterable[tuple[str | None, datetime, datetime]] = (),
 ) -> tuple[list[dict[str, Any]], int]:
-    """Gaps between consecutive recordings of one source, when the cause is known.
+    """Gaps between consecutive recordings of one source, when the cause is known, and
+    privacy gaps (excluded). A privacy gap inside one recording gets its `recordingId`.
 
-    items: (source_id, start, end, chronicle end_reason). Returns (gaps, unknown_skipped).
+    items: (source_id, start, end, chronicle end_reason, recording id).
+    Returns (gaps, unknown_skipped).
     """
+    items = list(items)
     day_start, day_end = day
     per_source: dict[str, list[tuple[datetime, datetime, str | None]]] = {}
-    for source_id, start, end, reason in items:
+    for source_id, start, end, reason, _rec in items:
         per_source.setdefault(source_id, []).append((start, end, reason))
     gaps: list[dict[str, Any]] = []
     skipped = 0
@@ -361,11 +396,7 @@ def build_gaps(
                     gaps.append(_gap(source_id, lo, hi, cause))
             if end >= high_end:
                 high_end, high_reason = end, reason
-    sources = sorted(per_source)
-    for source_id, start, end in privacy:
-        lo, hi = max(start, day_start), min(end, day_end)
-        if hi > lo:
-            gaps.append(_gap(source_id or (sources[0] if sources else "unknown"), lo, hi, "excluded"))
+    gaps += _privacy_gaps(items, day, privacy, sorted(per_source))
     gaps.sort(key=lambda g: (g["range"]["start"], g["sourceId"], g["id"]))
     return gaps, skipped
 
@@ -415,7 +446,7 @@ def build_bundle(
     sources: dict[str, dict[str, Any]] = {}
     recordings: list[dict[str, Any]] = []
     transcripts: list[dict[str, Any]] = []
-    gap_items: list[tuple[str, datetime, datetime, str | None]] = []
+    gap_items: list[tuple[str, datetime, datetime, str | None, str]] = []
     stats = DayStats()
     for conv in convs:
         if conv.deleted:
@@ -430,7 +461,7 @@ def build_bundle(
         sources.setdefault(source["id"], source)
         recordings.append(recording)
         transcripts.append(transcript)
-        gap_items.append((source["id"], start, end, conv.end_reason))
+        gap_items.append((source["id"], start, end, conv.end_reason, recording["id"]))
         stats.recordings += 1
         stats.segments += len(transcript["segments"])
         stats.minutes += (min(end, day[1]) - max(start, day[0])).total_seconds() / 60.0

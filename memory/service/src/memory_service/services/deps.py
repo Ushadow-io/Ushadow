@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from memory_service.actions import ActionExtractor, ActionFactStore
 from memory_service.engine import KnowledgeEngine, knowledge_key
@@ -26,6 +27,10 @@ class Deps:
     extractor: ActionExtractor
     clock: Callable[[], datetime] = field(default=utcnow)
     max_attempts: int = 5
+    min_owner_words: int = 20  # owner gate; 0 turns it off
+    lease_ttl: timedelta = timedelta(minutes=10)
+    cursor_overlap: timedelta = timedelta(seconds=30)  # re-read a little before the saved cursor
+    worker_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 
 # ---- ids ---------------------------------------------------------------------------------------
