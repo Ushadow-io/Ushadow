@@ -22,6 +22,7 @@ SEG = timedelta(seconds=10)
 
 def make_deps(**over) -> Deps:
     kw = dict(engine=FakeEngine(), tables=memory_tables(), ledger=FakeLedger(), min_owner_words=0,
+              owner_conversations_only=False,
               actions=InMemoryActionFactStore(), extractor=FakeActionExtractor())
     kw.update(over)
     return Deps(**kw)

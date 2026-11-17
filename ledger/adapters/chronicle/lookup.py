@@ -24,6 +24,7 @@ def normalize_conversation(conv: Any, capture_origin: Optional[str] = None) -> D
         "conversation_id": conv.conversation_id,
         "user_id": str(conv.user_id) if getattr(conv, "user_id", None) else None,
         "client_id": conv.client_id,
+        "external_source_id": getattr(conv, "external_source_id", None),
         "started_at": conv.started_at,
         "ended_at": conv.ended_at,
         "end_reason": _val(conv.end_reason) if conv.end_reason else None,

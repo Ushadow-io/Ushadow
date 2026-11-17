@@ -129,12 +129,37 @@ def absolute_time(ranges: List[Dict[str, Any]], offset: float,
 _GENERIC_LABEL = re.compile(r"^(speaker[ _-]?\d+|unknown.*|\d+)$", re.IGNORECASE)
 
 
+# Chronicle's Data Audit triage labels (backend constants NOISE_LABEL, BACKGROUND_SPEECH_LABEL):
+# a human marked this voice as not a real participant.
+HAND_MEDIA_LABELS = {"noise": "background", "background speech": "media"}
+
+
 def speaker_name(seg: Dict[str, Any], label: str) -> Optional[str]:
     """The identified name. Chronicle writes it to `identified_as`, or over `speaker` itself."""
+    if label.strip().lower() in HAND_MEDIA_LABELS:
+        return None
     name = str(seg.get("identified_as") or "").strip()
     if name and name.lower() != "unknown":
         return name
     return None if _GENERIC_LABEL.match(label.strip()) else (label.strip() or None)
+
+
+def speaker_role(label: str, name: Optional[str], owners: set, direction: str) -> str:
+    """Who a voice is, in the order Chronicle trusts: a human's triage label, then a recognised
+    name, then the capture route (system audio output = media). A microphone voice with no name
+    stays `unknown`: a TV in the room is not provable from the route."""
+    hand = HAND_MEDIA_LABELS.get(label.strip().lower())
+    if hand:
+        return hand
+    if name:
+        return "owner" if name.strip().lower() in owners else "unknown"
+    return "media" if direction == "output" else "unknown"
+
+
+def capture_direction(external_source_id: Any) -> str:
+    """`input`, `output` or `unknown`, from Chronicle's `<source>:<device>:<direction>` id."""
+    parts = str(external_source_id or "").split(":")
+    return parts[2] if len(parts) >= 3 and parts[2] in ("input", "output") else "unknown"
 
 
 def _speaker_label(seg: Dict[str, Any]) -> str:
@@ -144,7 +169,8 @@ def _speaker_label(seg: Dict[str, Any]) -> str:
     return f"Speaker {raw}" if isinstance(raw, int) else str(raw)
 
 
-def _map_segments(raw: List[Dict[str, Any]], ranges, owner_names: List[str], seg_prefix: str):
+def _map_segments(raw: List[Dict[str, Any]], ranges, owner_names: List[str], seg_prefix: str,
+                  direction: str = "unknown"):
     """Returns (segments, speakers, dropped_count)."""
     owners = {n.strip().lower() for n in owner_names if n and n.strip()}
     segments, speakers, dropped = [], {}, 0
@@ -154,7 +180,8 @@ def _map_segments(raw: List[Dict[str, Any]], ranges, owner_names: List[str], seg
             continue
         text = str(seg.get("text") or "").strip()
         label = _speaker_label(seg)
-        if (seg.get("segment_type") or "speech") != "speech" or not text or not label:
+        flagged = label.strip().lower() in HAND_MEDIA_LABELS  # triaged media: kept, with its role
+        if not text or not label or ((seg.get("segment_type") or "speech") != "speech" and not flagged):
             continue  # non-speech event/note, empty text, or no speaker: not transcript
         start = absolute_time(ranges, seg.get("start"))
         end = absolute_time(ranges, seg.get("end"), prefer_previous_boundary=True)
@@ -166,14 +193,14 @@ def _map_segments(raw: List[Dict[str, Any]], ranges, owner_names: List[str], seg
         name = speaker_name(seg, label)
         sp = speakers.setdefault(label, {"label": label, "role": "unknown"})
         if name:
-            sp["displayName"] = str(name)
-            if name.strip().lower() in owners:
-                sp["role"] = "owner"
+            sp.setdefault("displayName", str(name))
         entry = {"id": f"{seg_prefix}:{int(round(float(seg['start']) * 1000))}-{label}", "text": text, "speakerLabel": label,
                  "start": iso(start), "end": iso(end)}
         if isinstance(seg.get("confidence"), (int, float)):
             entry["confidence"] = float(seg["confidence"])
         segments.append(entry)
+    for label, sp in speakers.items():  # one role per label, from every line it spoke
+        sp["role"] = speaker_role(label, sp.get("displayName"), owners, direction)
     return segments, list(speakers.values()), dropped
 
 
@@ -223,8 +250,10 @@ def build_bundle(event: str, data: Dict[str, Any], facts: Dict[str, Any],
         return None, f"unsupported event {event!r}"
 
     rec_id = f"chronicle:{cid}"
+    direction = capture_direction(facts.get("external_source_id"))
+    modality = "audio_output" if direction == "output" else "audio_input"
     segments, speakers, dropped = _map_segments(raw, ranges, owner_names or [],
-                                                f"{rec_id}:{revision}")
+                                                f"{rec_id}:{revision}", direction)
     if not segments:
         return None, f"no segment with a provable absolute time ({dropped} dropped, {len(raw)} in)"
 
@@ -232,7 +261,7 @@ def build_bundle(event: str, data: Dict[str, Any], facts: Dict[str, Any],
     source_id = f"chronicle:{client_id}"
     start, end = ranges[0]["start"], max(r["end"] for r in ranges)
     recording: Dict[str, Any] = {
-        "id": rec_id, "sourceId": source_id, "modality": "audio_input",
+        "id": rec_id, "sourceId": source_id, "modality": modality,
         "range": {"start": iso(start), "end": iso(end)},
         "currentTranscriptRevision": revision,
         "metadata": {"chronicle": {
@@ -263,7 +292,7 @@ def build_bundle(event: str, data: Dict[str, Any], facts: Dict[str, Any],
     bundle = {
         "schemaVersion": SCHEMA_VERSION,
         "range": {"start": iso(start), "end": iso(end)},
-        "sources": [{"id": source_id, "kind": "other", "modalities": ["audio_input"],
+        "sources": [{"id": source_id, "kind": "other", "modalities": [modality],
                      "label": f"Chronicle client {client_id}"}],
         "recordings": [recording],
         "transcripts": [transcript],

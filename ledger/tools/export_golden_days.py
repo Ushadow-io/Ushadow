@@ -58,6 +58,18 @@ DEFAULT_SCHEMA = Path.home() / "repos" / "life-datatypes" / "schema" / "conversa
 UNKNOWN_SPEAKER = "unknown"
 # "Speaker 3", "unknown", "7": a diarization label, not a person's name.
 GENERIC_LABEL = re.compile(r"^(speaker[ _-]?\d+|unknown.*|\d+)$", re.IGNORECASE)
+# Chronicle's Data Audit triage labels: a human marked this voice as not a real participant.
+HAND_MEDIA_LABELS = {"noise": "background", "background speech": "media"}
+
+
+def speaker_role(label: str, name: str | None, owner_name: str | None, direction: str) -> str:
+    """A human's triage label, then a recognised name, then the capture route (output = media)."""
+    hand = HAND_MEDIA_LABELS.get(label.casefold())
+    if hand:
+        return hand
+    if name:
+        return "owner" if owner_name and name.casefold() == owner_name.casefold() else "unknown"
+    return "media" if direction == "output" else "unknown"
 
 # Chronicle Conversation.EndReason -> life-datatypes CutReason
 END_REASON_TO_CUT = {
@@ -257,6 +269,7 @@ def map_conversation(
     rec_start, rec_end = bounds
     source_id = source_id_for(conv)
     source = make_source(source_id, conv.client_id)
+    direction = "output" if source["modalities"] == ["audio_output"] else "input"
 
     ordered = sorted(
         enumerate(conv.segments),
@@ -275,6 +288,8 @@ def map_conversation(
         name = (raw.get("identified_as") or "").strip() or None
         if name is None or name.casefold() == "unknown":
             name = None if GENERIC_LABEL.match(label) else label
+        if label.casefold() in HAND_MEDIA_LABELS:
+            name = None
         seg: dict[str, Any] = {
             "id": f"{conv.id}:{revision}:{n:05d}",
             "text": raw.get("text") or "",
@@ -292,8 +307,7 @@ def map_conversation(
         speaker = speakers.setdefault(label, {"label": label, "role": "unknown"})
         if name and "displayName" not in speaker:
             speaker["displayName"] = name
-            if owner_name and name.casefold() == owner_name.casefold():
-                speaker["role"] = "owner"
+        speaker["role"] = speaker_role(label, speaker.get("displayName"), owner_name, direction)
         rec_end = max(rec_end, end)  # a recording must cover its own words
 
     recording: dict[str, Any] = {

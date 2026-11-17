@@ -30,6 +30,7 @@ class Deps:
     retry_backoff: timedelta = timedelta(seconds=30)  # wait after attempt n: backoff * 2**(n-1)
     retry_backoff_cap: timedelta = timedelta(minutes=15)
     min_owner_words: int = 20  # owner gate; 0 turns it off
+    owner_conversations_only: bool = True  # no owner voice in the conversation = skipped
     lease_ttl: timedelta = timedelta(minutes=10)
     worker_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 

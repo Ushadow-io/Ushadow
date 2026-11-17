@@ -22,6 +22,7 @@ class Settings:
     taskfacts_database_url: str = field(default="", repr=False)
     extractor: str = "none"  # none | fake | openai
     min_owner_words: int = 20  # owner gate: fewer owner words in a conversation = skipped
+    owner_conversations_only: bool = True  # a conversation with no owner voice makes no facts
     lease_seconds: int = 600  # lease on a running work unit (renewed while it runs)
     worker_interval_seconds: float = 0  # background sync + retry loop; 0 = off
     worker_users: tuple[str, ...] = ()  # users to sync even before they have a cursor or queue
@@ -44,6 +45,8 @@ def load_settings() -> Settings:
         taskfacts_database_url=e.get("TASKFACTS_DATABASE_URL", ""),
         extractor=e.get("MEMORY_ACTION_EXTRACTOR", "none"),
         min_owner_words=int(e.get("MEMORY_MIN_OWNER_WORDS", "20")),
+        owner_conversations_only=e.get("MEMORY_OWNER_CONVERSATIONS_ONLY", "true").strip().lower()
+        not in ("0", "false", "no", "off"),
         lease_seconds=int(e.get("MEMORY_LEASE_SECONDS", "600")),
         worker_interval_seconds=float(e.get("MEMORY_WORKER_INTERVAL_SECONDS") or 0),
         worker_users=tuple(u.strip() for u in e.get("MEMORY_WORKER_USERS", "").split(",") if u.strip()),

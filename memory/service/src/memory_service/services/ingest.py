@@ -182,9 +182,13 @@ async def _run(d: Deps, unit: WorkUnit) -> UnitStatus:
     unit.facts_written = unit.facts_rejected = unit.actions_written = unit.actions_rejected = 0
     if not ctx.lines:
         return UnitStatus.done
-    gate = owner_gate(ctx, d.min_owner_words) if d.min_owner_words > 0 else "ok"
-    if gate == "owner_unknown":  # no speaker is the owner: the gate cannot apply, do not skip
+    # "Owner conversations only" needs at least one owner word, whatever the word minimum is.
+    need = max(d.min_owner_words, 1) if d.owner_conversations_only else d.min_owner_words
+    gate = owner_gate(ctx, need) if need > 0 else "ok"
+    if gate == "owner_unknown":  # no speaker is the owner
         await d.tables.rejections.count(user, "owner_unknown")
+        if d.owner_conversations_only:
+            return UnitStatus.skipped
     elif gate == "below":
         await d.tables.rejections.count(user, "conversation_below_owner_words")
         return UnitStatus.skipped

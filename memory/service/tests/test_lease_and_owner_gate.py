@@ -139,3 +139,19 @@ async def test_gate_can_be_turned_off_and_threshold_is_configurable():
     assert unit.status == UnitStatus.done
     _, unit = await gated("owner", "Alice works at Acme.", n=5)
     assert unit.status == UnitStatus.skipped
+
+
+async def test_no_owner_voice_is_skipped_when_owner_conversations_only():
+    deps = clocked_deps(Clock(), min_owner_words=0, owner_conversations_only=True)
+    deps.ledger.add_transcript(USER_A, tr("rec-c1", "unknown", LONG))
+    unit = await MemoryPort(deps).ingest(USER_A, conversation("c1", "rec-c1", T0, 2))
+    assert unit.status == UnitStatus.skipped
+    assert await deps.tables.rejections.counts(USER_A) == {"owner_unknown": 1}
+    assert deps.engine.groups[group_id(USER_A)].episodes == {}  # nothing reached the engine
+
+
+async def test_no_owner_voice_is_ingested_when_setting_is_off():
+    deps = clocked_deps(Clock(), min_owner_words=20, owner_conversations_only=False)
+    deps.ledger.add_transcript(USER_A, tr("rec-c1", "unknown", LONG))
+    unit = await MemoryPort(deps).ingest(USER_A, conversation("c1", "rec-c1", T0, 2))
+    assert unit.status == UnitStatus.done
