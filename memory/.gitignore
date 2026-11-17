@@ -1,2 +1,4 @@
 # The root .gitignore ignores all tests/ folders. Keep ours.
 !tests/
+# Staged engine measurement output (facts.jsonl holds private words)
+service/eval/out/

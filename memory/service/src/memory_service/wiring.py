@@ -40,8 +40,12 @@ def _engine(s: Settings, db: Any) -> KnowledgeEngine:
         return FakeEngine()
     if s.engine == "fake-mongo":  # tests and demos: the fake, kept in this service's Mongo
         return PersistentFakeEngine(db["fake_engine"])
+    if s.engine == "staged":
+        from memory_service.engine.staged.factory import make_staged_engine
+
+        return make_staged_engine(s.staged)
     if s.engine != "graphiti":
-        raise ValueError(f"MEMORY_ENGINE={s.engine!r}: use graphiti, fake or fake-mongo")
+        raise ValueError(f"MEMORY_ENGINE={s.engine!r}: use graphiti, staged, fake or fake-mongo")
     from memory_service.engine.graphiti import make_graphiti_engine
 
     return make_graphiti_engine()
@@ -85,4 +89,5 @@ async def build_deps(s: Settings) -> Deps:
                 min_owner_words=s.min_owner_words,
                 owner_conversations_only=s.owner_conversations_only, lease_ttl=timedelta(seconds=s.lease_seconds),
                 max_attempts=s.max_attempts,
-                retry_backoff=timedelta(seconds=s.retry_backoff_seconds))
+                retry_backoff=timedelta(seconds=s.retry_backoff_seconds),
+                maintain_budget=s.staged.maintain_budget if s.staged.maintain else 0)

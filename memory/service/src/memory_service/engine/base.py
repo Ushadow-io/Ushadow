@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from memory_service.models import EpisodeInput, Statement
 from memory_service.schema import EvidenceRef
@@ -28,6 +28,8 @@ class EngineFact:
     # Proof the engine itself can point to. Graphiti gives none (episode granularity only);
     # then the service locates the quote in the episode lines and checks it.
     hints: list[EvidenceRef] = field(default_factory=list)
+    # 0..1, from how the engine decided (staged engine only; None = the engine gives none).
+    confidence: float | None = None
 
     @property
     def closed(self) -> bool:
@@ -89,3 +91,23 @@ class KnowledgeEngine(Protocol):
     async def reopen_fact(self, group: str, engine_id: str) -> None: ...
 
     async def clear(self, group: str) -> None: ...
+
+
+@dataclass
+class MaintainReport:
+    """What one bounded maintenance batch did. Counts only."""
+
+    llm_calls: int = 0
+    entities_reviewed: int = 0
+    entities_merged: int = 0
+    entities_confirmed: int = 0  # confirmed distinct: the uncertain tag was cleared
+    fact_pairs_checked: int = 0
+    facts_merged: int = 0
+    more: bool = False  # work was left for a later batch
+
+
+@runtime_checkable
+class Maintainable(Protocol):
+    """Optional engine extra: background clean-up, run by the worker only when idle."""
+
+    async def maintain(self, group: str, budget: int) -> MaintainReport: ...

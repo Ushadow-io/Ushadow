@@ -40,6 +40,8 @@ services:
       - MEMORY_DB=${MEMORY_DB:-memory}
       # graphiti | fake | fake-mongo (fakes: tests and demos only; fake is lost on restart)
       - MEMORY_ENGINE=${MEMORY_ENGINE:-graphiti}
+      # staged engine only: collection (one reconcile call per episode) | per_fact
+      - MEMORY_FACT_RECONCILE=${MEMORY_FACT_RECONCILE:-collection}
       - GRAPHITI_TELEMETRY_ENABLED=false
       - MEMORY_NEO4J_URI=${MEMORY_NEO4J_URI:-bolt://neo4j:7687}
       - MEMORY_NEO4J_USER=${NEO4J_USERNAME:-neo4j}

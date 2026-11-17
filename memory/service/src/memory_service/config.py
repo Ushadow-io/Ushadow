@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from memory_service.engine.staged.settings import StagedSettings
+
 os.environ.setdefault("GRAPHITI_TELEMETRY_ENABLED", "false")
 
 
@@ -17,7 +19,7 @@ class Settings:
     store: str = "mongo"  # mongo | memory
     mongo_uri: str = "mongodb://mongo:27017/?replicaSet=rs0"
     db_name: str = "memory"
-    engine: str = "graphiti"  # graphiti | fake | fake-mongo (fakes: tests and demos only)
+    engine: str = "graphiti"  # graphiti | staged | fake | fake-mongo (fakes: tests and demos only)
     actions: str = "mongo"  # mongo | taskfacts | memory (memory is lost on restart: tests only)
     taskfacts_database_url: str = field(default="", repr=False)
     extractor: str = "none"  # none | fake | openai
@@ -28,6 +30,7 @@ class Settings:
     worker_users: tuple[str, ...] = ()  # users to sync even before they have a cursor or queue
     max_attempts: int = 5  # a unit failing this often ends `failed` for good
     retry_backoff_seconds: float = 30  # wait after attempt n: this * 2**(n-1), capped at 15 min
+    staged: StagedSettings = field(default_factory=StagedSettings)  # MEMORY_ENGINE=staged only
 
 
 def load_settings() -> Settings:
@@ -52,4 +55,5 @@ def load_settings() -> Settings:
         worker_users=tuple(u.strip() for u in e.get("MEMORY_WORKER_USERS", "").split(",") if u.strip()),
         max_attempts=int(e.get("MEMORY_MAX_ATTEMPTS", "5")),
         retry_backoff_seconds=float(e.get("MEMORY_RETRY_BACKOFF_SECONDS", "30")),
+        staged=StagedSettings.from_env(e),
     )

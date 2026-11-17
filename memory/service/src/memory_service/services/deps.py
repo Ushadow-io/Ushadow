@@ -33,6 +33,7 @@ class Deps:
     owner_conversations_only: bool = True  # no owner voice in the conversation = skipped
     lease_ttl: timedelta = timedelta(minutes=10)
     worker_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    maintain_budget: int = 0  # model calls per idle-tick maintenance batch (engines with maintain); 0 = off
 
 
 # ---- ids ---------------------------------------------------------------------------------------
