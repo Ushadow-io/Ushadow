@@ -124,6 +124,31 @@ def parse_json(content: str | None) -> dict[str, Any]:
     return data
 
 
+_JSON_TYPES: dict[str, tuple[type, ...]] = {
+    "object": (dict,), "array": (list,), "string": (str,), "boolean": (bool,), "null": (type(None),)}
+
+
+def follows(data: Any, schema: Mapping[str, Any]) -> bool:
+    """A small check of the answer against the schema we sent (types, required keys, enums,
+    minItems). The server should enforce the schema; this catches a server that does not."""
+    if "anyOf" in schema:
+        return any(follows(data, s) for s in schema["anyOf"])
+    kinds = schema.get("type")
+    kinds = [kinds] if isinstance(kinds, str) else kinds or []
+    if kinds and not any(isinstance(data, _JSON_TYPES.get(k, (object,))) for k in kinds):
+        return False
+    if "enum" in schema and data not in schema["enum"]:
+        return False
+    if isinstance(data, dict):
+        props = schema.get("properties") or {}
+        return all(k in data for k in schema.get("required") or []) and all(
+            follows(v, props[k]) for k, v in data.items() if k in props)
+    if isinstance(data, list):
+        return len(data) >= int(schema.get("minItems") or 0) and all(
+            follows(v, schema.get("items") or {}) for v in data)
+    return True
+
+
 class OpenAICompatibleLLM:
     def __init__(self, cfg: LLMConfig, http: httpx.AsyncClient | None = None) -> None:
         self.cfg = cfg
@@ -149,7 +174,13 @@ class OpenAICompatibleLLM:
             usage = data.get("usage") or {}
             count.input_tokens = int(usage.get("prompt_tokens") or 0)
             count.output_tokens = int(usage.get("completion_tokens") or 0)
-            return parse_json(data["choices"][0]["message"].get("content"))
+            choice = data["choices"][0]
+            if choice.get("finish_reason") == "length":
+                raise LLMError("model answer was cut off (too long)")
+            answer = parse_json(choice["message"].get("content"))
+            if not follows(answer, req.schema):
+                raise LLMError("model answer does not follow the schema")
+            return answer
         except Exception:
             count.failures = 1
             raise
