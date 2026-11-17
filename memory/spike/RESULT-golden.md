@@ -83,3 +83,17 @@ Run 2026-11-17, same setup, fresh spike Neo4j. 15 Chronicle conversations: 4 del
 
 3 facts: 2 are the same fact, 1 is probably wrong, all 3 come from a TV show. 0 of 3 are about the
 user's life. Result: speaker roles and the owner gate were added (commit de13a4b1).
+
+## User's hand check of 14 Nov (2026-11-17)
+
+Read by the user, not marked row by row (so no precision number): the facts look correct. Two
+faults: some facts are duplicates, and some still come from media speech. The user expects the
+media share to fall as speaker recognition names more conversations.
+
+## Engine decision (S1.5)
+
+Graphiti stays as the engine behind the memory port. Open work, in order:
+1. Cost: up to 105 058 input tokens for one conversation (target about 1 000 per call).
+2. Duplicates: Graphiti's own dedupe leaves duplicates; the consolidation job (M5.1) must merge them.
+3. Media: handled outside the engine, by speaker roles and the owner gate.
+4. Not proven: closing of old facts (0 closed on 2 days), and stability of a rebuild on a long day.
