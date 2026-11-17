@@ -43,6 +43,8 @@ class Tokens:
     memory: str = field(default_factory=lambda: secrets.token_hex(16), repr=False)
     agent: str = field(default_factory=lambda: secrets.token_hex(16), repr=False)  # read API
     reader: str = field(default_factory=lambda: secrets.token_hex(16), repr=False)  # read API
+    # the key Ushadow signs user tokens with (AUTH_SECRET_KEY): a signed-in user at the ledger
+    auth_secret: str = field(default_factory=lambda: secrets.token_hex(32), repr=False)
 
     def ledger_tokens(self) -> str:
         return (f"chronicle:{self.chronicle},memory:{self.memory_to_ledger},agent:{self.agent},"

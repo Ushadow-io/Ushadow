@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import re
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
 import httpx2
+import jwt
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 
@@ -189,6 +191,47 @@ class ReadSteps:
             self.svc.memory.start()
         return "memory down: 200 partial=true with the ledger's conversations; write 503"
 
+    def _user_token(self, sub: str) -> str:
+        """A token as the Ushadow backend proxy sends it for a signed-in user."""
+        now = datetime.now(UTC)
+        claims = {"sub": sub, "iss": "ushadow", "aud": ["ushadow", "chronicle"], "iat": now,
+                  "exp": now + timedelta(minutes=5)}
+        return jwt.encode(claims, self.svc.tokens.auth_secret, algorithm="HS256")
+
+    def k9_signed_in_user_and_word_list(self) -> str:
+        """A signed-in user: own data with userId=me, nobody else's, no internal route; and the
+        word list, through the ledger to the real memory service."""
+        me, stranger = self._user_token(self.USER), self._user_token("someone-else")
+        mine = self.ok(self._l("GET", "/v1/timeline", token=me, params={"userId": "me", **DAY_RANGE}),
+                       "v1 timeline as the user")
+        _check(mine["userId"] == self.USER and mine["conversations"], "the user sees no conversations")
+        theirs = self.ok(self._l("GET", "/v1/timeline", token=stranger,
+                                 params={"userId": "me", **DAY_RANGE}), "v1 timeline as a stranger")
+        _check(theirs["conversations"] == [], "a stranger sees the user's conversations")
+        for token, user, path in ((stranger, self.USER, "/v1/timeline"), (me, self.USER, "/recordings"),
+                                  (me, "me", "/conversations")):
+            r = self._l("GET", path, token=token, params={"userId": user, **DAY_RANGE})
+            _check(r.status_code == 403, f"{path} as a user for {user!r}: HTTP {r.status_code}")
+        entry = {"userId": "me", "name": "Northwind Venue", "aliases": ["northwind", "the venue"],
+                 "type": "Place"}
+        made = self.ok(self._l("POST", "/v1/known-entities", token=me, json=entry), "add known entity")
+        _check(made["aliases"] == ["northwind", "the venue"], f"entry: {made}")
+        in_memory = self.ok(self._m("GET", "/known-entities", params={"userId": self.USER}),
+                            "memory known-entities")["entities"]
+        _check([e["name"] for e in in_memory] == ["Northwind Venue"], "the entry is not in memory")
+        seen = self.ok(self._l("GET", "/v1/known-entities", token=stranger, params={"userId": "me"}),
+                       "stranger list")["entities"]
+        _check(seen == [], "a stranger sees the user's word list")
+        self.ok(self._m("POST", "/rebuild", json={"userId": self.USER}), "rebuild")
+        after = self.ok(self._l("GET", "/v1/known-entities", token=me, params={"userId": "me"}),
+                        "list after rebuild")["entities"]
+        _check([e["name"] for e in after] == ["Northwind Venue"], "the entry did not survive a rebuild")
+        gone = {"userId": "me", "name": "Northwind Venue"}
+        self.ok(self._l("POST", "/v1/known-entities/remove", token=me, json=gone), "remove")
+        again = self._l("POST", "/v1/known-entities/remove", token=me, json=gone)
+        _check(again.status_code == 404, f"second remove: HTTP {again.status_code}")
+        return "user token: own data only, internal routes 403; word list kept in memory, survives a rebuild"
+
     def read_steps(self) -> list[tuple[str, Any]]:
         return [("k timeline shows the erase gap", self.k_timeline_gap),
                 ("k2 v1 search: facts with final proof", self.k2_search_proof),
@@ -199,4 +242,5 @@ class ReadSteps:
                 ("k5b v1 why(fact): human decision shown", self.k5b_why_shows_human_decision),
                 ("k6 v1 forget suppresses", self.k6_forget_suppresses),
                 ("k7 MCP search = HTTP search", self.k7_mcp_equals_http),
+                ("k9 signed-in user and the word list", self.k9_signed_in_user_and_word_list),
                 ("k8 memory down: partial", self.k8_memory_down)]

@@ -99,7 +99,7 @@ def ledger_env(mongo_uri: str, db: str, tokens: Tokens, memory_url: str) -> dict
     return {"LEDGER_MONGO_URI": mongo_uri, "LEDGER_DB": db, "LEDGER_TOKENS": tokens.ledger_tokens(),
             "LEDGER_TEST_FAKE_MODEL": "1", "LEDGER_TEST_FAKE_SPLIT_MARKER": SPLIT_MARKER,
             "LEDGER_SCOPES": json.dumps(READ_SCOPES), "MEMORY_URL": memory_url,
-            "MEMORY_TOKEN": tokens.memory}
+            "MEMORY_TOKEN": tokens.memory, "AUTH_SECRET_KEY": tokens.auth_secret}
 
 
 def memory_env(mongo_uri: str, db: str, ledger_url: str, ledger_token: str,
