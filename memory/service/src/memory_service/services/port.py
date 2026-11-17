@@ -11,11 +11,13 @@ from memory_service.models import (
     CorrectRequest,
     Decision,
     EraseReport,
+    FactDecision,
     FactKind,
     MemoryEntity,
     MemoryFact,
     RebuildReport,
     SearchFilters,
+    Statement,
     SyncReport,
     WorkUnit,
 )
@@ -41,6 +43,20 @@ def _need(user_id: str) -> str:
     if not user_id or not user_id.strip():
         raise ValueError("a user is required")
     return user_id
+
+
+def _shown(fact_id: str, dec: Decision) -> FactDecision:
+    out = FactDecision(id=dec.id, fact_id=fact_id, kind="correct" if dec.op == "assert"
+                       else "suppress", at=dec.created_at)
+    p = dec.payload or {}
+    if dec.op != "assert" or not p:
+        return out
+    if dec.kind == FactKind.knowledge:
+        out.statement = Statement.model_validate(p)
+    else:
+        v = p.get("value") or {}
+        out.text, out.due, out.direction = v.get("text"), v.get("due"), v.get("direction")
+    return out
 
 
 class MemoryPort:
@@ -139,6 +155,39 @@ class MemoryPort:
             return True
         return any(knowledge_fact_id(user_id, f.signature()) == fact_id
                    for f in await self.d.engine.facts(group_id(user_id)))
+
+    async def fact(self, user_id: str, fact_id: str) -> MemoryFact | None:
+        """One fact of this user with its evidence. None: no such fact for this user, or the
+        human removed it (the same answer, so nothing shows that it existed)."""
+        user_id = _need(user_id)
+        eff = await human_wins.effective(self.d, user_id)
+        if fact_id.startswith(ACTION_PREFIX):
+            a = await self._action_fact(user_id, fact_id)
+            if a is None or a.value.get("key_hash") in eff.suppressed:
+                return None
+            return self._action(user_id, a)
+        if not fact_id.startswith(KNOWLEDGE_PREFIX):
+            return None
+        for f in await self.d.engine.facts(group_id(user_id)):
+            if knowledge_fact_id(user_id, f.signature()) == fact_id:
+                if (m := await self._knowledge(user_id, f, eff)) is not None:
+                    return m
+        return None
+
+    async def fact_decisions(self, user_id: str, fact_id: str) -> list[FactDecision] | None:
+        """The human decisions that apply to a fact that `fact` would show. None: no such fact."""
+        user_id = _need(user_id)
+        fact = await self.fact(user_id, fact_id)
+        if fact is None:
+            return None
+        if fact.kind == FactKind.action:
+            a = await self._action_fact(user_id, fact_id)
+            key = (a.value.get("key_hash") if a else None) or ""
+        else:
+            key = fact_id.removeprefix(KNOWLEDGE_PREFIX)
+        return [_shown(fact_id, dec) for dec in await self.d.tables.decisions.for_user(user_id)
+                if dec.key_hash == key and dec.op in ("suppress", "assert")
+                and dec.kind == fact.kind]
 
     # ---- human decisions ------------------------------------------------------------------------
 

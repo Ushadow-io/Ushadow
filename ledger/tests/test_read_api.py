@@ -127,9 +127,12 @@ async def test_why_conversation_and_facts(api):
     act = (await _get(http, "why", factId="act_promise")).json()
     assert act["item"]["evidence"][0]["quote"] and act["steps"][0]["decidedBy"] == "model"
     know = (await _get(http, "why", factId="mf_alexjob")).json()
-    assert know["partial"] and know["partialReasons"] == ["memory_fact_lookup_unsupported"]
-    private = (await _get(http, "why", "reader", factId="act_private")).json()
-    assert private["item"] is None and private["steps"] == [] and private["withheld"] == 2
+    assert not know["partial"] and know["item"]["evidence"][0]["quote"] == (
+        "Alex works at Northwind")
+    assert know["steps"][0]["role"] == "asserted"
+    private_r = await _get(http, "why", "reader", factId="act_private")
+    assert private_r.status_code == 404
+    assert "health" not in private_r.text
 
 
 async def test_correct_and_forget_are_human_decisions_in_scope(api):
@@ -179,3 +182,41 @@ async def test_memory_down_degrades_never_500(api):
     w = await http.post("/v1/forget", json={"userId": USER, "factIds": ["mf_alexjob"]},
                         headers=auth("agent"))
     assert w.status_code == 503 and w.json() == {"detail": "memory is unavailable"}
+
+
+async def test_why_knowledge_fact_shows_evidence_conversations_and_human_decisions(api):
+    http, mem = api
+    body = (await _get(http, "why", factId="mf_alexjob")).json()
+    assert body["partial"] is False and body["item"]["id"] == "mf_alexjob"
+    assert body["item"]["evidence"][0]["recordingId"] == "rec-m"
+    assert body["conversations"] and all(c["kind"] == "conversation" for c in body["conversations"])
+    ids = {c["id"] for c in body["conversations"]}
+    forming = [s for s in body["steps"] if s["conversationId"]]
+    assert forming and {s["conversationId"] for s in forming} <= ids
+    assert {s["decidedBy"] for s in forming} <= {"rule", "model", "human"}
+    assert not [s for s in body["steps"] if s["decidedBy"] == "human"]
+    fact = {"userId": USER, "fact": {"factId": "mf_alexjob", "statement": {
+        "subject": "Alex", "relation": "works at", "object": "Southgate venue"}}}
+    assert (await http.post("/v1/correct", json=fact, headers=auth("agent"))).status_code == 200
+    gone = await _get(http, "why", factId="mf_alexjob")
+    assert gone.status_code == 404  # the corrected-away fact is not shown
+    new_id = next(i for i in mem.facts if i.startswith("mf_human"))
+    new = (await _get(http, "why", factId=new_id)).json()
+    [human] = [s for s in new["steps"] if s["decidedBy"] == "human" and s["role"] == "corrected"]
+    assert human["text"] == "Alex works at Southgate venue" and human["at"]
+
+
+async def test_why_fact_scope_missing_forgotten_and_memory_down(api):
+    http, mem = api
+    assert (await _get(http, "why", factId="mf_nothing")).status_code == 404
+    out = await _get(http, "why", "convonly", factId="mf_alexjob")
+    assert out.status_code == 404 and out.json() == (await _get(http, "why", factId="mf_x")).json()
+    assert (await _get(http, "why", "reader", factId="act_private")).status_code == 404
+    assert (await _get(http, "why", factId="act_private")).status_code == 200
+    await http.post("/v1/forget", json={"userId": USER, "factIds": ["mf_alexsmith"]},
+                    headers=auth("agent"))
+    assert (await _get(http, "why", factId="mf_alexsmith")).status_code == 404
+    mem.down = True
+    r = await _get(http, "why", factId="mf_alexjob")
+    assert r.status_code == 200 and r.json()["partial"] is True
+    assert r.json()["partialReasons"] == ["memory_unreachable"] and r.json()["item"] is None

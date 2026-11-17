@@ -18,6 +18,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import sys
 import time
 from collections import Counter, defaultdict
 from contextvars import ContextVar
@@ -39,12 +41,17 @@ class Call:
     input_tokens: int | None
     output_tokens: int | None
     latency_s: float
+    reasoning_tokens: int | None = None  # part of output_tokens, when the server reports it
+    finish_reason: str | None = None
+    server_ms: float | None = None  # llama.cpp `timings` prompt_ms + predicted_ms (compute, no queue)
 
 
 class CallLedger:
     def __init__(self) -> None:
         self.calls: list[Call] = []
         self.logical_llm_calls: Counter[str] = Counter()
+        self.attempt_errors: list[dict[str, str]] = []  # failed LLM attempts (JSON, empty, ...)
+        self.think_stripped = 0  # responses that had a <think> block in content
 
     # -- httpx hooks -------------------------------------------------------
     def event_hooks(self) -> dict[str, list[Any]]:
@@ -57,23 +64,37 @@ class CallLedger:
             kind = "llm" if path.endswith("/chat/completions") else (
                 "embed" if path.endswith("/embeddings") else "other")
             await response.aread()
-            in_tok = out_tok = None
+            in_tok = out_tok = reason_tok = finish = server_ms = None
             try:
-                usage = response.json().get("usage") or {}
+                body = response.json()
+                usage = body.get("usage") or {}
                 in_tok = usage.get("prompt_tokens")
                 out_tok = usage.get("completion_tokens")
-            except (ValueError, AttributeError):
+                reason_tok = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+                finish = ((body.get("choices") or [{}])[0] or {}).get("finish_reason")
+                tm = body.get("timings") or {}
+                if tm:
+                    server_ms = round((tm.get("prompt_ms") or 0) + (tm.get("predicted_ms") or 0), 1)
+            except (ValueError, AttributeError, IndexError):
                 pass
             self.calls.append(Call(kind, current_episode.get(), current_prompt.get(),
                                    response.status_code, in_tok, out_tok,
-                                   time.perf_counter() - t0))
+                                   time.perf_counter() - t0, reason_tok, finish, server_ms))
+            if kind == "llm" and os.environ.get("SPIKE_PROGRESS") == "1":  # ids + counts only
+                c = self.calls[-1]
+                print(f"      call {len(self.calls)} {c.episode} {c.prompt} {c.status} "
+                      f"{c.input_tokens}+{c.output_tokens} tok {c.latency_s:.0f}s wall "
+                      f"{(c.server_ms or 0) / 1000:.1f}s compute",
+                      file=sys.stderr, flush=True)
 
         return {"request": [on_request], "response": [on_response]}
 
     # -- summaries ---------------------------------------------------------
     def for_episode(self, label: str) -> dict[str, Any]:
-        return summarize([c for c in self.calls if c.episode == label],
-                         self.logical_llm_calls[label])
+        out = summarize([c for c in self.calls if c.episode == label],
+                        self.logical_llm_calls[label])
+        out["llm_failed_attempts"] = sum(1 for e in self.attempt_errors if e["episode"] == label)
+        return out
 
     def per_prompt(self, exclude: tuple[str, ...] = ()) -> dict[str, dict[str, Any]]:
         groups: dict[str, list[Call]] = defaultdict(list)
@@ -100,7 +121,10 @@ def summarize(calls: list[Call], logical: int | None) -> dict[str, Any]:
         "llm_usage_missing": sum(1 for c in llm if c.input_tokens is None),
         "input_tokens": tok(llm, "input_tokens"),
         "output_tokens": tok(llm, "output_tokens"),
+        "reasoning_tokens": tok(llm, "reasoning_tokens"),
+        "llm_finish_length": sum(1 for c in llm if c.finish_reason == "length"),
         "llm_seconds": round(sum(c.latency_s for c in llm), 3),
+        "llm_server_compute_seconds": round(sum(c.server_ms or 0 for c in llm) / 1000, 3),
         "embed_http_calls": len(emb),
         "embed_tokens": tok(emb, "input_tokens"),
         "other_http_calls": sum(1 for c in calls if c.kind == "other"),

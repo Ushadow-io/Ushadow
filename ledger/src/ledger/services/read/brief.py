@@ -5,18 +5,15 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from ledger.clients.memory import ACTION_PREFIX, MemoryFact
+from ledger.clients.memory import MemoryFact
 from ledger.l2_models import ConversationView
 from ledger.read_models import (
     BriefAnswer,
     BriefRequest,
-    Item,
-    ItemKind,
     Refusal,
     RefusalCode,
     WhyAnswer,
     WhyRequest,
-    WhyStep,
 )
 from ledger.schema import TimeRange
 from ledger.services.read.answers import ReadDeps, people_of
@@ -29,6 +26,7 @@ from ledger.services.read.views import (
     people,
     words,
 )
+from ledger.services.read.why_fact import conversation_steps, why_fact
 
 RECENT = 5
 NOT_FOUND = Refusal(code=RefusalCode.not_found, detail="not found for this user")
@@ -110,38 +108,15 @@ class BriefHandlers:
     async def why(self, req: WhyRequest) -> WhyAnswer | Refusal:
         if req.conversationId:
             return await self._why_conversation(req.userId, req.conversationId)
-        return await self._why_fact(req.userId, req.factId or "")
+        return await why_fact(self.d, req.userId, req.factId or "")
 
     async def _why_conversation(self, user_id: str, conv_id: str) -> WhyAnswer | Refusal:
         view = await self.d.conversations.get(user_id, conv_id)
         why = await self.d.conversations.why(user_id, conv_id)
         if view is None or why is None:
             return NOT_FOUND
-        steps = [WhyStep(kind=ItemKind.conversation, role=row.role, source=row.source,
-                         decidedBy=row.link.decidedBy.value if row.link else "rule", link=row.link)
-                 for row in why.decisions]
+        steps = conversation_steps(why)
         rng = view.conversation.range
         return WhyAnswer(userId=user_id, range=rng, target={"kind": "conversation", "id": conv_id},
                          item=conversation_item(view), steps=steps,
                          gaps=await self.d.query.gaps(user_id, rng))
-
-    async def _why_fact(self, user_id: str, fact_id: str) -> WhyAnswer | Refusal:
-        """Action facts are found through /action-facts. Memory has no lookup of ONE knowledge
-        fact by id yet: such an answer is partial (`memory_fact_lookup_unsupported`)."""
-        mem = MemoryView(self.d.memory, user_id)
-        target = {"kind": "fact", "id": fact_id}
-        if not fact_id.startswith(ACTION_PREFIX):
-            return WhyAnswer(userId=user_id, target=target, partial=True,
-                             partialReasons=["memory_fact_lookup_unsupported"])
-        fact = next((f for f in await mem.action_facts() if f.id == fact_id), None)
-        if fact is None:
-            return mem.mark(WhyAnswer(userId=user_id, target=target)) if mem.reasons else NOT_FOUND
-        item = fact_item(fact)
-        return WhyAnswer(userId=user_id, target=target, item=item, steps=[_asserted(item)])
-
-
-def _asserted(item: Item) -> WhyStep:
-    """Who made the fact: a person (a human decision) or the extractor model."""
-    return WhyStep(kind=item.kind, subKind=item.subKind, sensitivity=item.sensitivity,
-                   role="asserted", source=item.source,
-                   decidedBy="human" if item.source == "person" else "model")

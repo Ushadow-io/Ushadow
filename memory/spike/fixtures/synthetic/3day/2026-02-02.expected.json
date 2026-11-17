@@ -1,0 +1,59 @@
+{
+ "date": "2026-02-02",
+ "conversations": [
+  {
+   "id": "c1",
+   "revision": 1,
+   "title": "synthetic c1",
+   "range": {
+    "start": "2026-02-02T09:00:00Z",
+    "end": "2026-02-02T09:01:34Z"
+   },
+   "parts": [
+    {
+     "recordingId": "rec-0202-a",
+     "range": {
+      "start": "2026-02-02T09:00:00Z",
+      "end": "2026-02-02T09:01:34Z"
+     }
+    }
+   ]
+  },
+  {
+   "id": "c2",
+   "revision": 1,
+   "title": "synthetic c2",
+   "range": {
+    "start": "2026-02-02T13:00:00Z",
+    "end": "2026-02-02T13:01:10Z"
+   },
+   "parts": [
+    {
+     "recordingId": "rec-0202-b",
+     "range": {
+      "start": "2026-02-02T13:00:00Z",
+      "end": "2026-02-02T13:01:10Z"
+     }
+    }
+   ]
+  },
+  {
+   "id": "c3",
+   "revision": 1,
+   "title": "synthetic c3",
+   "range": {
+    "start": "2026-02-02T18:30:00Z",
+    "end": "2026-02-02T18:31:10Z"
+   },
+   "parts": [
+    {
+     "recordingId": "rec-0202-c",
+     "range": {
+      "start": "2026-02-02T18:30:00Z",
+      "end": "2026-02-02T18:31:10Z"
+     }
+    }
+   ]
+  }
+ ]
+}

@@ -136,6 +136,13 @@ def _finish(out: Path, m: dict[str, Any], ledger, probes_res: list) -> None:
 
     m["probes"] = [asdict(p) for p in probes_res]
     m["per_prompt_all_incl_probes_and_rebuild"] = ledger.per_prompt()
+    from collections import Counter
+
+    m["llm_failed_attempts_by_prompt_and_error"] = {
+        f"{k[0]} / {k[1]}": v for k, v in sorted(Counter(
+            (e["prompt"], e["error"]) for e in ledger.attempt_errors).items())}
+    m["llm_failed_attempts"] = ledger.attempt_errors
+    m["think_blocks_stripped"] = ledger.think_stripped
     m["finished_at"] = datetime.now(UTC).isoformat()
     (out / "metrics.json").write_text(json.dumps(m, indent=2, default=str), encoding="utf-8")
     (out / "calls.json").write_text(json.dumps(ledger.dump(), indent=1), encoding="utf-8")
@@ -177,6 +184,12 @@ async def cmd_run(args) -> None:
         m["graph_counts"] = await graph.counts(g, args.user)
         run1 = await graph.edges(g, args.user)
         ents1 = [e["name"] for e in await graph.entities(g, args.user)]
+        import re
+
+        lab = re.compile(r"^\s*speaker[\s_-]*\d+\s*$", re.IGNORECASE)
+        m["entities_that_are_speaker_labels"] = sum(1 for x in ents1 if lab.match(x or ""))
+        m["entities_total"] = len(ents1)
+        (out / "run1_entities.json").write_text(json.dumps(ents1, indent=1), encoding="utf-8")
         (out / "run1_facts.json").write_text(json.dumps(run1, indent=1), encoding="utf-8")
         (out / "episode_map.json").write_text(json.dumps(id_map, indent=1), encoding="utf-8")
         sample = probes.sample_edges(run1, args.sample, args.seed)

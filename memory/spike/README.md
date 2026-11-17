@@ -83,6 +83,14 @@ export SPIKE_EMBED_MODEL=nomic-embed-text SPIKE_EMBED_DIM=768
 # optional: SPIKE_LLM_SMALL_MODEL, SPIKE_EMBED_BASE_URL, SPIKE_EMBED_API_KEY,
 #           SPIKE_STRUCTURED_OUTPUT=json_object (if the server ignores json_schema),
 #           SEMAPHORE_LIMIT=2, S1_NEO4J_URI/USER/PASSWORD
+#           SPIKE_LLM_EXTRA_BODY='{"chat_template_kwargs": {"enable_thinking": false}}'  (Qwen3 on
+#             llama.cpp: thinking off; ~30x fewer output tokens on a tiny call)
+#           SPIKE_HTTP_TIMEOUT=1800 (read timeout, s), SPIKE_PROGRESS=1 (one stderr line per LLM call:
+#             ids, prompt name, tokens, wall vs server compute), SPIKE_DUMP_RESPONSES=file.jsonl
+#             (raw model output; SYNTHETIC DATA ONLY)
+# Richer synthetic set: fixtures/synthetic/3day/ (make_fixture.py, ground_truth.json).
+# expected.json may also be the golden export shape ({conversationId, start, end, deleted}, no
+# parts): deleted conversations are skipped, the time range applies to every recording.
 
 # 4. Dry run on the synthetic fixture with the real model (cheap: 2 episodes + probes)
 uv run python run_spike.py run --bundle-dir fixtures/synthetic --user dry --fresh --rebuild --out out/dry

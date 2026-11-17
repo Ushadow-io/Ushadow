@@ -71,6 +71,23 @@ class ReadSteps:
         _check(any(i["kind"] == "conversation" for i in body["items"]), "no conversation matched")
         return f"{len(facts)} facts, quotes in the FINAL transcript; conversations merged"
 
+    def k2b_why_fact_quote(self) -> str:
+        body = self.ok(self._v1("search", q="Alex works Northwind"), "v1 search")
+        fact = next(i for i in body["items"] if i["kind"] == "knowledge" and i["source"] != "person")
+        why = self.ok(self._v1("why", factId=fact["id"]), "v1 why fact")
+        _check(not why["partial"] and why["item"]["id"] == fact["id"], f"why partial: {why}")
+        _check(why["item"]["evidence"], "why fact: no evidence")
+        for ev in why["item"]["evidence"]:
+            text = self.final_text(ev["recordingId"], ev["range"]["start"], ev["range"]["end"])
+            _check(ev["quote"] and _norm(ev["quote"]) in text, "why quote not in final transcript")
+        _check(why["conversations"], "why fact: no source conversation")
+        formed = [st for st in why["steps"] if st["conversationId"]]
+        _check(formed and all(st["decidedBy"] in ("rule", "model", "human") for st in formed),
+               f"conversation steps: {why['steps']}")
+        _check(not [st for st in why["steps"] if st["role"] == "corrected"], "decision before any")
+        return (f"why(fact): quote in the FINAL transcript, {len(why['conversations'])} "
+                f"conversation(s), {len(formed)} forming decision(s)")
+
     def _mark_private(self) -> str:
         """Memory's fake extractor never sets a sensitivity: mark one STANDING action fact
         `private` in THIS run's memory test database (test data only; memory code unchanged)."""
@@ -104,6 +121,7 @@ class ReadSteps:
 
     def k5_correct_survives_rebuild(self) -> str:
         [f] = [f for f in self.facts() if f["text"].startswith(GREEN_TEA)]
+        self._old_fact_id = f["id"]
         body = {"fact": {"factId": f["id"], "statement": {"subject": "Kim", "relation": "prefers",
                                                          "object": "Black Coffee"}}}
         out = self.ok(self._v1_post("correct", body), "v1 correct")
@@ -116,6 +134,17 @@ class ReadSteps:
                f"after rebuild: {texts}")
         return "human correction via /v1/correct holds after a memory rebuild"
 
+    def k5b_why_shows_human_decision(self) -> str:
+        items = self.ok(self._v1("search", q="Kim prefers"), "search")["items"]
+        [new] = [i for i in items if i["text"] == "Kim prefers Black Coffee"]
+        why = self.ok(self._v1("why", factId=new["id"]), "v1 why corrected fact")
+        [dec] = [st for st in why["steps"] if st["role"] == "corrected"]
+        _check(dec["decidedBy"] == "human" and dec["text"] == "Kim prefers Black Coffee",
+               f"decision: {dec}")
+        _check(self._v1("why", factId=self._old_fact_id).status_code == 404,
+               "why on the corrected-away fact is not 404")
+        return "why(fact) after /v1/correct shows the human decision; the old fact is 404"
+
     def k6_forget_suppresses(self) -> str:
         acts = self.ok(self._v1("search", q="cedar fence panels"), "search")["items"]
         [a] = [i for i in acts if i["kind"] == "action" and "cedar" in (i["text"] or "")]
@@ -124,6 +153,7 @@ class ReadSteps:
         self.ok(self._m("POST", "/rebuild", json={"userId": self.USER}), "rebuild")
         again = self.ok(self._v1("search", q="cedar fence panels"), "search")["items"]
         _check(a["id"] not in {i["id"] for i in again}, "forgotten fact came back after rebuild")
+        _check(self._v1("why", factId=a["id"]).status_code == 404, "why on a forgotten fact")
         return "forget wrote a suppress decision; the fact stays gone after a rebuild"
 
     def k7_mcp_equals_http(self) -> str:
@@ -162,9 +192,11 @@ class ReadSteps:
     def read_steps(self) -> list[tuple[str, Any]]:
         return [("k timeline shows the erase gap", self.k_timeline_gap),
                 ("k2 v1 search: facts with final proof", self.k2_search_proof),
+                ("k2b v1 why(fact): quote in final transcript", self.k2b_why_fact_quote),
                 ("k3 scope: private fact withheld", self.k3_private_withheld),
                 ("k4 read-only principal: 403 on correct", self.k4_read_only),
                 ("k5 v1 correct survives a memory rebuild", self.k5_correct_survives_rebuild),
+                ("k5b v1 why(fact): human decision shown", self.k5b_why_shows_human_decision),
                 ("k6 v1 forget suppresses", self.k6_forget_suppresses),
                 ("k7 MCP search = HTTP search", self.k7_mcp_equals_http),
                 ("k8 memory down: partial", self.k8_memory_down)]

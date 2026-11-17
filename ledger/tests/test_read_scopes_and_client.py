@@ -129,3 +129,30 @@ async def test_client_unreadable_answer_is_an_outage():
     shape = _client(lambda r: httpx.Response(200, json={"facts": [{"no": "id"}]}))
     with pytest.raises(MemoryUnavailable):
         await shape.action_facts("u")
+
+
+async def test_client_fact_and_decisions_routes():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/facts/mf_gone" or request.url.path.startswith("/facts/mf_gone/"):
+            return httpx.Response(404, json={"detail": "no such fact"})
+        if request.url.path.endswith("/decisions"):
+            return httpx.Response(200, json={"decisions": [{
+                "id": "dec_1", "factId": "mf_1", "kind": "correct", "by": "person",
+                "at": "2026-11-14T10:00:00Z",
+                "statement": {"subject": "A", "relation": "likes", "object": "B"}}]})
+        return httpx.Response(200, json={"id": "mf_1", "userId": "u", "kind": "knowledge",
+                                         "key": "likes", "text": "A likes B", "source": "person",
+                                         "evidence": []})
+
+    c = _client(handler)
+    assert (await c.fact("u", "mf_1")).text == "A likes B"
+    [d] = await c.fact_decisions("u", "mf_1")
+    assert (d.kind, d.statement["object"]) == ("correct", "B")
+    assert await c.fact("u", "mf_gone") is None and await c.fact_decisions("u", "mf_gone") is None
+    assert seen[:2] == ["/facts/mf_1", "/facts/mf_1/decisions"]
+    bad = _client(lambda r: httpx.Response(200, json={"decisions": [{"no": "id"}]}))
+    with pytest.raises(MemoryUnavailable):
+        await bad.fact_decisions("u", "mf_1")

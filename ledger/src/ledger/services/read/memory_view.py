@@ -10,6 +10,7 @@ from ledger.clients.memory import (
     MemoryClient,
     MemoryEntity,
     MemoryFact,
+    MemoryFactDecision,
     MemoryRejected,
     MemoryUnavailable,
 )
@@ -42,6 +43,12 @@ class MemoryView:
 
     async def entity(self, entity_id: str) -> MemoryEntity | None:
         return await self._safe(self._c.entity(self._user, entity_id), None)
+
+    async def fact(self, fact_id: str) -> MemoryFact | None:
+        return await self._safe(self._c.fact(self._user, fact_id), None)
+
+    async def fact_decisions(self, fact_id: str) -> list[MemoryFactDecision] | None:
+        return await self._safe(self._c.fact_decisions(self._user, fact_id), None)
 
     async def action_facts(self) -> list[MemoryFact]:
         return await self._safe(self._c.action_facts(self._user), [])

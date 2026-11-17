@@ -1,0 +1,204 @@
+{
+ "schemaVersion": "2.0.0",
+ "range": {
+  "start": "2026-02-03T00:00:00Z",
+  "end": "2026-02-04T00:00:00Z"
+ },
+ "timezone": "Europe/London",
+ "sources": [
+  {
+   "id": "src-pendant",
+   "kind": "wearable",
+   "modalities": [
+    "audio_input"
+   ],
+   "label": "Synthetic pendant"
+  },
+  {
+   "id": "src-phone",
+   "kind": "phone",
+   "modalities": [
+    "audio_input"
+   ],
+   "label": "Synthetic phone"
+  }
+ ],
+ "recordings": [
+  {
+   "id": "rec-0203-a",
+   "sourceId": "src-pendant",
+   "range": {
+    "start": "2026-02-03T10:00:00Z",
+    "end": "2026-02-03T10:01:10Z"
+   },
+   "currentTranscriptRevision": "r1"
+  },
+  {
+   "id": "rec-0203-b",
+   "sourceId": "src-phone",
+   "range": {
+    "start": "2026-02-03T16:00:00Z",
+    "end": "2026-02-03T16:01:02Z"
+   },
+   "currentTranscriptRevision": "r1"
+  },
+  {
+   "id": "rec-0203-c",
+   "sourceId": "src-phone",
+   "range": {
+    "start": "2026-02-03T20:00:00Z",
+    "end": "2026-02-03T20:00:54Z"
+   },
+   "currentTranscriptRevision": "r1"
+  }
+ ],
+ "transcripts": [
+  {
+   "recordingId": "rec-0203-a",
+   "revision": "r1",
+   "createdAt": "2026-02-03T10:01:10Z",
+   "model": "synthetic",
+   "speakers": [
+    {
+     "label": "S0",
+     "role": "owner"
+    },
+    {
+     "label": "S1",
+     "role": "participant",
+     "displayName": "Maya Lindqvist"
+    },
+    {
+     "label": "S2",
+     "role": "participant",
+     "displayName": "Raj Patel"
+    }
+   ],
+   "segments": [
+    {
+     "id": "rec-0203-a-0",
+     "text": "Hi, I am Raj Patel, I manage Maya's team at Brightwater Labs.",
+     "speakerLabel": "S2",
+     "start": "2026-02-03T10:00:00Z",
+     "end": "2026-02-03T10:00:06Z"
+    },
+    {
+     "id": "rec-0203-a-1",
+     "text": "I approve the decision to move Heron to Postgres.",
+     "speakerLabel": "S2",
+     "start": "2026-02-03T10:00:08Z",
+     "end": "2026-02-03T10:00:14Z"
+    },
+    {
+     "id": "rec-0203-a-2",
+     "text": "Thanks Raj. We also need more time for the migration.",
+     "speakerLabel": "S1",
+     "start": "2026-02-03T10:00:16Z",
+     "end": "2026-02-03T10:00:22Z"
+    },
+    {
+     "id": "rec-0203-a-3",
+     "text": "Agreed. The Heron deadline moves from the twenty-eighth of February to the fourteenth of March.",
+     "speakerLabel": "S2",
+     "start": "2026-02-03T10:00:24Z",
+     "end": "2026-02-03T10:00:30Z"
+    },
+    {
+     "id": "rec-0203-a-4",
+     "text": "That works for us.",
+     "speakerLabel": "S0",
+     "start": "2026-02-03T10:00:32Z",
+     "end": "2026-02-03T10:00:38Z"
+    }
+   ]
+  },
+  {
+   "recordingId": "rec-0203-b",
+   "revision": "r1",
+   "createdAt": "2026-02-03T16:01:02Z",
+   "model": "synthetic",
+   "speakers": [
+    {
+     "label": "S0",
+     "role": "owner"
+    },
+    {
+     "label": "S1",
+     "role": "participant",
+     "displayName": "Jonas Okafor"
+    }
+   ],
+   "segments": [
+    {
+     "id": "rec-0203-b-0",
+     "text": "Good news, my knee feels much better.",
+     "speakerLabel": "S1",
+     "start": "2026-02-03T16:00:00Z",
+     "end": "2026-02-03T16:00:06Z"
+    },
+    {
+     "id": "rec-0203-b-1",
+     "text": "My physio, Doctor Elena Ruiz, says I can run again.",
+     "speakerLabel": "S1",
+     "start": "2026-02-03T16:00:08Z",
+     "end": "2026-02-03T16:00:14Z"
+    },
+    {
+     "id": "rec-0203-b-2",
+     "text": "Great. Shall we run on Saturday at seven in the morning at Kelsey Park?",
+     "speakerLabel": "S0",
+     "start": "2026-02-03T16:00:16Z",
+     "end": "2026-02-03T16:00:22Z"
+    },
+    {
+     "id": "rec-0203-b-3",
+     "text": "Yes, Saturday at seven at Kelsey Park.",
+     "speakerLabel": "S1",
+     "start": "2026-02-03T16:00:24Z",
+     "end": "2026-02-03T16:00:30Z"
+    }
+   ]
+  },
+  {
+   "recordingId": "rec-0203-c",
+   "revision": "r1",
+   "createdAt": "2026-02-03T20:00:54Z",
+   "model": "synthetic",
+   "speakers": [
+    {
+     "label": "S0",
+     "role": "owner"
+    },
+    {
+     "label": "S1",
+     "role": "participant",
+     "displayName": "Lena"
+    }
+   ],
+   "segments": [
+    {
+     "id": "rec-0203-c-0",
+     "text": "Big news. I got the head teacher job at Elmfield Primary School in York.",
+     "speakerLabel": "S1",
+     "start": "2026-02-03T20:00:00Z",
+     "end": "2026-02-03T20:00:06Z"
+    },
+    {
+     "id": "rec-0203-c-1",
+     "text": "Congratulations! So you are leaving Leeds?",
+     "speakerLabel": "S0",
+     "start": "2026-02-03T20:00:08Z",
+     "end": "2026-02-03T20:00:14Z"
+    },
+    {
+     "id": "rec-0203-c-2",
+     "text": "Yes, we are moving from Leeds to York in April.",
+     "speakerLabel": "S1",
+     "start": "2026-02-03T20:00:16Z",
+     "end": "2026-02-03T20:00:22Z"
+    }
+   ]
+  }
+ ],
+ "corrections": []
+}

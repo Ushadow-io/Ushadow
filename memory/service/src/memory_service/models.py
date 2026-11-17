@@ -217,6 +217,22 @@ class Decision(ApiModel):
     created_at: AwareDatetime
 
 
+class FactDecision(ApiModel):
+    """A human decision on one fact, as shown to a reader. No stored words except the human's
+    own corrected statement (on `correct`). `kind`: correct (the human asserted this fact) |
+    suppress (the human removed it: a retract or a forget, which the table stores alike)."""
+
+    id: str
+    fact_id: str
+    kind: str
+    by: str = "person"
+    at: AwareDatetime
+    statement: Statement | None = None  # correct, knowledge
+    text: str | None = None  # correct, action
+    due: str | None = None
+    direction: str | None = None
+
+
 class EraseReport(ApiModel):
     proofs_removed: int = 0
     facts_deleted: int = 0

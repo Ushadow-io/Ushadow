@@ -19,6 +19,7 @@ from ledger.clients.memory import (
     MemoryDecision,
     MemoryEntity,
     MemoryFact,
+    MemoryFactDecision,
     MemoryUnavailable,
 )
 
@@ -36,6 +37,7 @@ class FakeMemoryClient:
         self.entities: dict[str, MemoryEntity] = {e.id: e for e in entities or []}
         self.suppressed: set[str] = set()
         self.decisions: list[MemoryDecision] = []
+        self.fact_decisions_of: dict[str, list[MemoryFactDecision]] = {}
         self.calls: list[str] = []
         self.down = False
         self._ids = itertools.count(1)
@@ -67,6 +69,18 @@ class FakeMemoryClient:
         self._check("action-facts")
         return [f for f in self._live(user_id) if f.kind == "action"]
 
+    async def fact(self, user_id: str, fact_id: str) -> MemoryFact | None:
+        self._check("facts")
+        return None if fact_id in self.suppressed else self.facts.get(fact_id)
+
+    async def fact_decisions(
+        self, user_id: str, fact_id: str
+    ) -> list[MemoryFactDecision] | None:
+        self._check("facts")
+        if fact_id in self.suppressed or fact_id not in self.facts:
+            return None
+        return list(self.fact_decisions_of.get(fact_id, []))
+
     def _decide(self, kind: str, op: str) -> MemoryDecision:
         d = MemoryDecision(id=f"d{next(self._ids)}", kind=kind, op=op, createdAt=datetime.now(UTC))
         self.decisions.append(d)
@@ -86,6 +100,11 @@ class FakeMemoryClient:
             update = {"id": fid, "text": new_text, "source": "person", "evidence": [],
                       "invalidAt": None}
             self.facts[fid] = old.model_copy(update=update)
+            st = body.get("statement")
+            self.fact_decisions_of[fid] = [MemoryFactDecision(
+                id=f"fd{next(self._ids)}", kind="correct", at=datetime.now(UTC), statement=st,
+                text=None if st else new_text, due=body.get("due"),
+                direction=body.get("direction"))]
             decs.append(self._decide(old.kind, "assert"))
         return decs
 

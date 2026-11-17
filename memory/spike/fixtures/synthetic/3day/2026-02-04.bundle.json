@@ -1,0 +1,157 @@
+{
+ "schemaVersion": "2.0.0",
+ "range": {
+  "start": "2026-02-04T00:00:00Z",
+  "end": "2026-02-05T00:00:00Z"
+ },
+ "timezone": "Europe/London",
+ "sources": [
+  {
+   "id": "src-pendant",
+   "kind": "wearable",
+   "modalities": [
+    "audio_input"
+   ],
+   "label": "Synthetic pendant"
+  },
+  {
+   "id": "src-phone",
+   "kind": "phone",
+   "modalities": [
+    "audio_input"
+   ],
+   "label": "Synthetic phone"
+  }
+ ],
+ "recordings": [
+  {
+   "id": "rec-0204-a",
+   "sourceId": "src-pendant",
+   "range": {
+    "start": "2026-02-04T09:30:00Z",
+    "end": "2026-02-04T09:31:18Z"
+   },
+   "currentTranscriptRevision": "r1"
+  },
+  {
+   "id": "rec-0204-b",
+   "sourceId": "src-pendant",
+   "range": {
+    "start": "2026-02-04T15:00:00Z",
+    "end": "2026-02-04T15:01:02Z"
+   },
+   "currentTranscriptRevision": "r1"
+  }
+ ],
+ "transcripts": [
+  {
+   "recordingId": "rec-0204-a",
+   "revision": "r1",
+   "createdAt": "2026-02-04T09:31:18Z",
+   "model": "synthetic",
+   "speakers": [
+    {
+     "label": "S0",
+     "role": "owner"
+    },
+    {
+     "label": "S1",
+     "role": "participant",
+     "displayName": "Maya Lindqvist"
+    }
+   ],
+   "segments": [
+    {
+     "id": "rec-0204-a-0",
+     "text": "I have news: I resigned from Brightwater Labs yesterday.",
+     "speakerLabel": "S1",
+     "start": "2026-02-04T09:30:00Z",
+     "end": "2026-02-04T09:30:06Z"
+    },
+    {
+     "id": "rec-0204-a-1",
+     "text": "I now work at Northwind Analytics, I start there next Monday.",
+     "speakerLabel": "S1",
+     "start": "2026-02-04T09:30:08Z",
+     "end": "2026-02-04T09:30:14Z"
+    },
+    {
+     "id": "rec-0204-a-2",
+     "text": "Wow. Who takes over Heron?",
+     "speakerLabel": "S0",
+     "start": "2026-02-04T09:30:16Z",
+     "end": "2026-02-04T09:30:22Z"
+    },
+    {
+     "id": "rec-0204-a-3",
+     "text": "Raj's team at Brightwater takes over the Heron migration.",
+     "speakerLabel": "S1",
+     "start": "2026-02-04T09:30:24Z",
+     "end": "2026-02-04T09:30:30Z"
+    },
+    {
+     "id": "rec-0204-a-4",
+     "text": "And I sent you the schema draft this morning, as promised.",
+     "speakerLabel": "S1",
+     "start": "2026-02-04T09:30:32Z",
+     "end": "2026-02-04T09:30:38Z"
+    },
+    {
+     "id": "rec-0204-a-5",
+     "text": "Got it, thanks Maya.",
+     "speakerLabel": "S0",
+     "start": "2026-02-04T09:30:40Z",
+     "end": "2026-02-04T09:30:46Z"
+    }
+   ]
+  },
+  {
+   "recordingId": "rec-0204-b",
+   "revision": "r1",
+   "createdAt": "2026-02-04T15:01:02Z",
+   "model": "synthetic",
+   "speakers": [
+    {
+     "label": "S0",
+     "role": "owner"
+    },
+    {
+     "label": "S1",
+     "role": "participant",
+     "displayName": "Jonas Okafor"
+    }
+   ],
+   "segments": [
+    {
+     "id": "rec-0204-b-0",
+     "text": "Bad news, my knee flared up again after Saturday's run.",
+     "speakerLabel": "S1",
+     "start": "2026-02-04T15:00:00Z",
+     "end": "2026-02-04T15:00:06Z"
+    },
+    {
+     "id": "rec-0204-b-1",
+     "text": "I have withdrawn from the Riverside half marathon.",
+     "speakerLabel": "S1",
+     "start": "2026-02-04T15:00:08Z",
+     "end": "2026-02-04T15:00:14Z"
+    },
+    {
+     "id": "rec-0204-b-2",
+     "text": "Sorry to hear that. I will run the Riverside half marathon alone then.",
+     "speakerLabel": "S0",
+     "start": "2026-02-04T15:00:16Z",
+     "end": "2026-02-04T15:00:22Z"
+    },
+    {
+     "id": "rec-0204-b-3",
+     "text": "By the way, I bought the telescope for Ivy yesterday.",
+     "speakerLabel": "S0",
+     "start": "2026-02-04T15:00:24Z",
+     "end": "2026-02-04T15:00:30Z"
+    }
+   ]
+  }
+ ],
+ "corrections": []
+}

@@ -131,3 +131,18 @@ def test_compare_runs_overlap():
     assert c["fact_exact_jaccard"] == round(1 / 3, 3)
     assert c["fact_fuzzy_match_run1_in_run2_at_0.6"] == 0.5
     assert c["entity_name_jaccard"] == 0.5
+
+
+def test_golden_export_conversation_shape(day):
+    """Golden export: {conversationId, start, end, deleted, segmentCount}, no parts."""
+    bundle, _ = day
+    convs = [
+        {"conversationId": "g1", "start": "2026-01-05T09:00:00Z", "end": "2026-01-05T09:15:00Z",
+         "deleted": False, "segmentCount": 2, "title": "t"},
+        {"conversationId": "g2", "start": "2026-01-05T09:20:00Z", "end": "2026-01-05T09:40:00Z",
+         "deleted": True, "segmentCount": 2, "title": "t"},
+    ]
+    eps, info = build_episodes(bundle, {"conversations": convs, "episodes": []}, "2026-01-05")
+    assert [e.episode_id for e in eps] == ["g1@r1"]
+    assert info.conversations_deleted_skipped == 1
+    assert eps[0].lines[0].text.startswith("Morning Priya")

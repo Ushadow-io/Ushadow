@@ -82,6 +82,9 @@ class WhyStep(ScopedItem):
     decidedBy: str = Field(description="human | model | rule")
     source: str | None = Field(default=None, description="human | daypass | rule | model | ...")
     link: Link | None = None
+    conversationId: str | None = Field(default=None, description="Step on this conversation")
+    at: datetime | None = Field(default=None, description="Human decision: when")
+    text: str | None = Field(default=None, description="Human decision: the human's own words")
 
 
 # ---- answers ----
@@ -143,6 +146,9 @@ class TimelineAnswer(Answer):
 class WhyAnswer(Answer):
     target: dict[str, str]
     item: Item | None = None
+    conversations: list[Item] = Field(
+        default_factory=list, description="Fact: the conversations its evidence comes from"
+    )
     steps: list[WhyStep] = Field(default_factory=list)
 
 

@@ -20,10 +20,12 @@ and started again after step e. Both runs must end in the same state (step j).
 | i | No token / wrong token: 401 on both services. Memory with a wrong ledger token: a clean 502 that names the status and route only |
 | k | Read API `GET /v1/timeline`: conversations in order; the erase of step g is a gap with cause `excluded`; a service principal without a scope gets 403 |
 | k2 | `GET /v1/search`: facts (memory) and conversations (ledger) merged; every fact quote is in the FINAL transcript |
+| k2b | `GET /v1/why?factId=` on a knowledge fact: evidence quote is in the FINAL transcript, the source conversation(s) with their forming decisions, no human decision yet |
 | k3 | Scope: one standing action fact is marked `private` in this run's memory test DB (the fake extractor sets no sensitivity); the `reader` principal (normal only) does not get it and sees `withheld >= 1` |
 | k4 | The read-only `reader` gets 403 on `POST /v1/correct`; the fact is unchanged |
 | k5 | `POST /v1/correct` (a knowledge fact) is a human decision in memory and holds after memory `/rebuild` |
-| k6 | `POST /v1/forget`: a `suppress` decision; the fact stays gone after `/rebuild` |
+| k5b | `GET /v1/why?factId=` on the corrected fact shows the human decision (and its words); the corrected-away fact is 404 |
+| k6 | `POST /v1/forget`: a `suppress` decision; the fact stays gone after `/rebuild`; `why` on it is 404 |
 | k7 | The MCP tool `search` (Streamable HTTP at `/mcp`, real SDK client) returns the same items as `GET /v1/search`; `/mcp` without a token is 401 |
 | k8 | Memory killed: `/v1/search` is 200 with `partial: true`, reason `memory_unreachable`, and the ledger's conversations; a write is 503; memory is started again |
 | j | The restarted run ends in the same state as the straight one |

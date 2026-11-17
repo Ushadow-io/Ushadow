@@ -20,7 +20,7 @@ from ledger.llm.structured import Answer, Call, StructuredCaller
 from ledger.schema import Decider, LinkKind, TimeRange
 from ledger.services.l2.context import LinkSpec, RunCtx, split_key
 from ledger.services.l2.lines import Line, lines_digest
-from ledger.services.l2.prompts import STATE_SYSTEM, StateAnswer, state_payload
+from ledger.services.l2.prompts import STATE_SYSTEM, StateAnswer, ref_index, state_payload
 from ledger.services.l2.rules import Side, check_split, split_index
 from ledger.timeutil import stable_hash
 
@@ -94,7 +94,7 @@ class StateUpdater:
         value: StateAnswer = answer.value
         if not inp.allow_split or not value.topicChangedAt:
             return StateOutcome(state_id, value.state)
-        index = split_index(inp.lines, value.topicChangedAt)
+        index = ref_index(value.topicChangedAt, len(inp.lines))  # the model cites a line ref
         problem = "unknown_segment" if index is None else check_split(inp.prior, inp.lines, index)
         link = await ctx.write(self._split_spec(inp, state_id, index, problem, answer.model))
         if problem is not None:

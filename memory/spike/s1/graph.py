@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -81,16 +82,64 @@ class Settings:
             "structured_output": self.structured_output,
             "neo4j_uri": self.neo4j_uri,
             "semaphore_limit": os.environ.get("SEMAPHORE_LIMIT"),
+            "llm_extra_body": os.environ.get("SPIKE_LLM_EXTRA_BODY"),
+            "http_timeout_s": os.environ.get("SPIKE_HTTP_TIMEOUT", "1800"),
             "stub_llm": self.stub,
         }
 
 
+_THINK_RE = re.compile(r"^\s*<think>.*?</think>\s*", re.DOTALL)
+
+
+def _extra_body() -> dict[str, Any] | None:
+    """SPIKE_LLM_EXTRA_BODY: JSON merged into every chat request, e.g.
+    '{"chat_template_kwargs": {"enable_thinking": false}}' for Qwen3 on llama.cpp."""
+    raw = os.environ.get("SPIKE_LLM_EXTRA_BODY")
+    return json.loads(raw) if raw else None
+
+
 class InstrumentedLLMClient(OpenAIGenericClient):
-    """Counts logical generate_response calls and labels HTTP calls by prompt."""
+    """Counts logical generate_response calls and labels HTTP calls by prompt.
+
+    Also adapts local models: adds SPIKE_LLM_EXTRA_BODY to each request, and strips a
+    leading <think>...</think> block from the content (reasoning models that do not put
+    their reasoning in a separate `reasoning_content` field). The reranker shares this
+    AsyncOpenAI client, so it gets the same adaptation."""
 
     def __init__(self, ledger: CallLedger, **kw: Any) -> None:
         super().__init__(**kw)
         self._ledger = ledger
+        create = self.client.chat.completions.create
+        extra = _extra_body()
+
+        async def create_adapted(*a: Any, **k: Any) -> Any:
+            if extra:
+                k["extra_body"] = {**(k.get("extra_body") or {}), **extra}
+            resp = await create(*a, **k)
+            for ch in getattr(resp, "choices", None) or []:
+                msg = ch.message
+                if msg is not None and msg.content and "<think>" in msg.content:
+                    ledger.think_stripped += 1
+                    msg.content = _THINK_RE.sub("", msg.content)
+            dump = os.environ.get("SPIKE_DUMP_RESPONSES")  # SYNTHETIC DATA ONLY: holds model output
+            if dump and getattr(resp, "choices", None):
+                with open(dump, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"episode": current_episode.get(), "prompt": current_prompt.get(),
+                                         "content": resp.choices[0].message.content}) + "\n")
+            return resp
+
+        self.client.chat.completions.create = create_adapted  # type: ignore[method-assign]
+
+    async def _generate_response(self, *args: Any, **kwargs: Any):  # type: ignore[override]
+        # One attempt. Graphiti's tenacity wrapper retries JSONDecodeError etc. 4x; count each
+        # failed attempt here (type only, the message can quote model output).
+        try:
+            return await super()._generate_response(*args, **kwargs)
+        except Exception as exc:
+            self._ledger.attempt_errors.append(
+                {"episode": current_episode.get(), "prompt": current_prompt.get(),
+                 "error": type(exc).__name__})
+            raise
 
     async def generate_response(self, messages, response_model=None, *args, **kwargs):  # type: ignore[override]
         name = kwargs.get("prompt_name") or (
@@ -105,8 +154,10 @@ class InstrumentedLLMClient(OpenAIGenericClient):
 
 def _http(ledger: CallLedger, s: Settings) -> httpx.AsyncClient:
     transport = stub_transport(s.embed_dim) if s.stub else None
+    # Local model servers load models on demand and may be shared: allow long calls.
+    read_s = float(os.environ.get("SPIKE_HTTP_TIMEOUT", "1800"))
     return httpx.AsyncClient(event_hooks=ledger.event_hooks(), transport=transport,
-                             timeout=httpx.Timeout(600.0, connect=20.0))
+                             timeout=httpx.Timeout(read_s, connect=20.0))
 
 
 def make_graphiti(s: Settings, ledger: CallLedger) -> Graphiti:

@@ -101,3 +101,23 @@ async def test_no_model_configured_saves_no_model_decision():
     assert again.model.layers["gap"].unavailable >= 1  # asked again: nothing was saved
     assert await shape(services) == first
     assert first and all(r[7] is None for r in first)
+
+
+def test_model_sees_short_line_refs_and_code_maps_them_back():
+    from ledger.l2_models import ConvState
+    from ledger.services.l2.prompts import composer_payload, ref_index, state_payload
+
+    lines = [
+        Line(f"chronicle:aaaa:bbbb:{i:05d}", "rec", "rev", at("09:00:00") + timedelta(seconds=i),
+             at("09:00:00") + timedelta(seconds=i + 1), "Speaker 0", "unknown", None, None,
+             f"text {i}")
+        for i in range(3)
+    ]
+    rows = state_payload(ConvState(), lines, True)["lines"]
+    assert [r.split("|")[0] for r in rows] == ["L1", "L2", "L3"]
+    assert "chronicle:" not in "".join(rows)
+    payload, seg_ids = composer_payload(ConvState(), lines)
+    assert seg_ids == [ln.seg_id for ln in lines] and payload["lines"][0].startswith("L1|")
+    assert [ref_index(v, 3) for v in ("L1", "l3", 2, " L2 ", "L4", "L0", "x", None)] == [
+        0, 2, 1, 1, None, None, None, None,
+    ]

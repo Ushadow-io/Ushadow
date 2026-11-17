@@ -23,6 +23,7 @@ from ledger.read_models import (
     ResolveRequest,
     SearchRequest,
     TimelineRequest,
+    WhyAnswer,
     WhyRequest,
     WriteAnswer,
     WriteRequest,
@@ -67,6 +68,10 @@ class ReadGateway:
         answer = await self._readers[type(req)](req)
         if isinstance(answer, Refusal):
             return answer
+        if isinstance(req, WhyRequest) and req.factId and isinstance(answer, WhyAnswer) and (
+            answer.item is not None and not gate.allows(scope, answer.item)
+        ):
+            return NOT_FOUND  # an out-of-scope fact looks the same as a missing one
         answer.withheld += gate.apply(scope, answer)
         answer.after_scope()
         return answer

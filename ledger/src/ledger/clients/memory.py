@@ -4,6 +4,8 @@ Memory routes used (all with `Authorization: Bearer $MEMORY_TOKEN`, all scoped b
   GET  /search?userId&q&kinds&includeClosed&limit  -> {"facts": [MemoryFact (camelCase)]}
   GET  /entities/{entityId}?userId                  -> MemoryEntity | 404
   GET  /action-facts?userId                         -> {"facts": [taskfacts ActionFact (snake)]}
+  GET  /facts/{factId}?userId                       -> MemoryFact | 404
+  GET  /facts/{factId}/decisions?userId             -> {"decisions": [FactDecision]} | 404
   POST /correct  {userId, factId, retract, statement, text, due, direction} -> {"decisions"} | 404
   POST /forget   {userId, factIds, entityId}                                -> {"decisions"}
 Fact ids: memory's public format, `mf_...` (knowledge), `act_...` (action), entities `ent_...`.
@@ -89,6 +91,20 @@ class MemoryDecision(_Loose):
     createdAt: datetime | None = None
 
 
+class MemoryFactDecision(_Loose):
+    """A human decision on one fact: kind correct | suppress; `statement` / `text` is the
+    human's own words (correct only)."""
+
+    id: str
+    kind: str
+    by: str = "person"
+    at: datetime | None = None
+    statement: dict[str, Any] | None = None
+    text: str | None = None
+    due: str | None = None
+    direction: str | None = None
+
+
 class FactQuery(BaseModel):
     q: str = Field(min_length=1)
     kinds: list[str] = Field(default_factory=lambda: ["knowledge", "action"])
@@ -102,6 +118,12 @@ class MemoryClient(Protocol):
     async def entity(self, user_id: str, entity_id: str) -> MemoryEntity | None: ...
 
     async def action_facts(self, user_id: str) -> list[MemoryFact]: ...
+
+    async def fact(self, user_id: str, fact_id: str) -> MemoryFact | None: ...
+
+    async def fact_decisions(
+        self, user_id: str, fact_id: str
+    ) -> list[MemoryFactDecision] | None: ...
 
     async def correct(self, body: dict[str, Any]) -> list[MemoryDecision] | None: ...
 
@@ -176,6 +198,18 @@ class HttpMemoryClient:
     async def action_facts(self, user_id: str) -> list[MemoryFact]:
         data = await self._json("GET", "/action-facts", params={"userId": user_id})
         return _parse(lambda: [action_fact(f) for f in (data or {"facts": []})["facts"]])
+
+    async def fact(self, user_id: str, fact_id: str) -> MemoryFact | None:
+        data = await self._json("GET", f"/facts/{fact_id}", params={"userId": user_id})
+        return _parse(lambda: MemoryFact.model_validate(data)) if data is not None else None
+
+    async def fact_decisions(
+        self, user_id: str, fact_id: str
+    ) -> list[MemoryFactDecision] | None:
+        data = await self._json("GET", f"/facts/{fact_id}/decisions", params={"userId": user_id})
+        if data is None:
+            return None
+        return _parse(lambda: [MemoryFactDecision.model_validate(d) for d in data["decisions"]])
 
     async def correct(self, body: dict[str, Any]) -> list[MemoryDecision] | None:
         data = await self._json("POST", "/correct", json=body)

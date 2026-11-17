@@ -41,6 +41,20 @@ async def test_posts_chat_completions_with_json_mode_and_returns_content():
     body = seen["body"]
     assert body["model"] == "small-1" and body["temperature"] == 0
     assert body["response_format"] == {"type": "json_object"}
+    assert body["seed"] == 0
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}  # see client doc
+
+
+async def test_thinking_switch_leaves_the_template_flag_out():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    cfg = HttpModelConfig(base_url="http://llm.local/v1", model="m", thinking=True, seed=None)
+    await OpenAICompatModel(cfg, transport=httpx.MockTransport(handler)).complete(REQ)
+    assert "chat_template_kwargs" not in seen["body"] and "seed" not in seen["body"]
 
 
 async def test_retries_server_errors_then_reports_unavailable():

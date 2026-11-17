@@ -15,17 +15,31 @@ from ledger.schema import EvidenceRef
 from ledger.services.l2.build import Built
 from ledger.services.l2.context import RunCtx
 from ledger.services.l2.lines import Line
-from ledger.services.l2.prompts import COMPOSER_SYSTEM, ComposeAnswer, composer_payload
+from ledger.services.l2.prompts import (
+    COMPOSER_SYSTEM,
+    ComposeAnswer,
+    composer_payload,
+    ref_index,
+)
 
 QUOTE_MAX = 200
+# 500 cut 2 of 10 answers of Qwen3.6-35B on a real day mid-JSON (finish=length, then
+# JSONDecodeError); its full answers were 310-460 tokens. 1000 leaves room.
+COMPOSER_MAX_TOKENS = 1000
 
 
-def _checker(known: set[str]):
+def _checker(count: int):
     def check(answer: ComposeAnswer) -> str | None:
-        bad = [c for c in answer.citations if c not in known]
+        bad = [c for c in answer.citations if ref_index(c, count) is None]
         return f"unknown_citations:{len(bad)}" if bad else None
 
     return check
+
+
+def _segments(refs: Sequence[str], seg_ids: Sequence[str]) -> list[str]:
+    """Segment ids of the cited refs; refs that are not lines of the call are dropped."""
+    picked = (ref_index(r, len(seg_ids)) for r in refs)
+    return [seg_ids[i] for i in picked if i is not None]
 
 
 def citations(ids: Sequence[str], lines: Sequence[Line]) -> list[EvidenceRef]:
@@ -54,14 +68,14 @@ class Composer:
         revision = doc["revision"]
         if doc.get("composedRevision") == revision or doc["body"].get("closedAt") is None:
             return False
-        known = {ln.seg_id for ln in built.lines}
+        payload, seg_ids = composer_payload(built.state, built.lines)
         call = Call(
             "composer",
             COMPOSER_SYSTEM,
-            composer_payload(built.state, built.lines),
+            payload,
             ComposeAnswer,
-            max_tokens=500,
-            check=_checker(known),
+            max_tokens=COMPOSER_MAX_TOKENS,
+            check=_checker(len(seg_ids)),
         )
         answer = await self._caller.ask(call, ctx.stats)
         if answer.unavailable:
@@ -75,7 +89,8 @@ class Composer:
                 "title": value.title,
                 "summary": value.summary or None,
                 "citations": [
-                    c.model_dump(mode="json") for c in citations(value.citations, built.lines)
+                    c.model_dump(mode="json")
+                    for c in citations(_segments(value.citations, seg_ids), built.lines)
                 ]
                 or None,
             }

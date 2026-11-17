@@ -1,0 +1,118 @@
+{
+  "note": "SYNTHETIC. What a correct extractor should find. 'Owner' is the device owner.",
+  "facts": [
+    {
+      "conv": "c1",
+      "fact": "Maya Lindqvist works at Brightwater Labs as a data engineer",
+      "valid": "until 2026-02-03 (resigned), superseded by c7"
+    },
+    {
+      "conv": "c1",
+      "fact": "Maya works on the Heron migration"
+    },
+    {
+      "conv": "c1",
+      "fact": "Decision 2026-02-02: Heron moves to Postgres instead of MongoDB"
+    },
+    {
+      "conv": "c1",
+      "fact": "Heron deadline is 2026-02-28",
+      "valid": "superseded by c4"
+    },
+    {
+      "conv": "c1",
+      "fact": "Commitment: Maya sends Owner the schema draft by Friday 2026-02-06",
+      "valid": "fulfilled in c7 (sent 2026-02-04)"
+    },
+    {
+      "conv": "c2",
+      "fact": "Owner and Jonas Okafor signed up for the Riverside half marathon on 2026-03-15",
+      "valid": "Jonas withdrew in c8"
+    },
+    {
+      "conv": "c2",
+      "fact": "Jonas's left knee is sore (since Sunday)",
+      "valid": "better in c5, flared again in c8"
+    },
+    {
+      "conv": "c3",
+      "fact": "Lena (Owner's sister) lives in Leeds",
+      "valid": "moving to York in April"
+    },
+    {
+      "conv": "c3",
+      "fact": "Ivy (Lena's daughter, implied) turns six on 2026-02-20"
+    },
+    {
+      "conv": "c3",
+      "fact": "Commitment: Owner buys Ivy a telescope",
+      "valid": "fulfilled in c8"
+    },
+    {
+      "conv": "c4",
+      "fact": "Raj Patel manages Maya's team at Brightwater Labs"
+    },
+    {
+      "conv": "c4",
+      "fact": "Raj approved the Postgres decision"
+    },
+    {
+      "conv": "c4",
+      "fact": "Heron deadline moved to 2026-03-14"
+    },
+    {
+      "conv": "c5",
+      "fact": "Jonas's physio is Dr Elena Ruiz; she says he can run again"
+    },
+    {
+      "conv": "c5",
+      "fact": "Plan: Owner and Jonas run Saturday 2026-02-07 07:00 at Kelsey Park"
+    },
+    {
+      "conv": "c6",
+      "fact": "Lena got the head teacher job at Elmfield Primary School in York"
+    },
+    {
+      "conv": "c6",
+      "fact": "Lena moves from Leeds to York in April 2026"
+    },
+    {
+      "conv": "c7",
+      "fact": "Maya resigned from Brightwater Labs on 2026-02-03"
+    },
+    {
+      "conv": "c7",
+      "fact": "Maya works at Northwind Analytics, starting Monday 2026-02-09"
+    },
+    {
+      "conv": "c7",
+      "fact": "Raj's team takes over the Heron migration"
+    },
+    {
+      "conv": "c7",
+      "fact": "Maya sent Owner the schema draft on 2026-02-04"
+    },
+    {
+      "conv": "c8",
+      "fact": "Jonas's knee flared up again after Saturday's run"
+    },
+    {
+      "conv": "c8",
+      "fact": "Jonas withdrew from the Riverside half marathon"
+    },
+    {
+      "conv": "c8",
+      "fact": "Owner will run the Riverside half marathon alone"
+    },
+    {
+      "conv": "c8",
+      "fact": "Owner bought the telescope for Ivy on 2026-02-03"
+    }
+  ],
+  "traps": [
+    "c2 media line (traffic report) must not produce a fact (it is dropped by role)",
+    "Owner has no name: facts about 'Owner' are fine; inventing a name is an error",
+    "Ivy is not stated to be Lena's daughter; 'Lena's daughter' is an inference",
+    "c8 says Saturday's run happened; c7/c8 dates are relative ('yesterday', 'next Monday')"
+  ]
+}

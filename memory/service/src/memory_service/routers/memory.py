@@ -11,6 +11,7 @@ from memory_service.models import (
     Decision,
     EraseReport,
     EraseRequest,
+    FactDecision,
     FactKind,
     ForgetRequest,
     IngestRequest,
@@ -96,6 +97,26 @@ async def entity(entity_id: str, user_id: str = Query(alias="userId"),
     if e is None:
         raise HTTPException(404, "no such entity")
     return _dump(e)
+
+
+@router.get("/facts/{fact_id}")
+async def fact(fact_id: str, user_id: str = Query(alias="userId"),
+               p: Principal = Depends(require_service),
+               mp: MemoryPort = Depends(port)) -> dict[str, Any]:
+    f: MemoryFact | None = await mp.fact(authorize_user(p, user_id), fact_id)
+    if f is None:
+        raise HTTPException(404, "no such fact")
+    return _dump(f)
+
+
+@router.get("/facts/{fact_id}/decisions")
+async def fact_decisions(fact_id: str, user_id: str = Query(alias="userId"),
+                         p: Principal = Depends(require_service),
+                         mp: MemoryPort = Depends(port)) -> dict[str, list[dict[str, Any]]]:
+    decs: list[FactDecision] | None = await mp.fact_decisions(authorize_user(p, user_id), fact_id)
+    if decs is None:
+        raise HTTPException(404, "no such fact")
+    return {"decisions": [_dump(d) for d in decs]}
 
 
 @router.post("/correct")

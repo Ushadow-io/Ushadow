@@ -73,6 +73,7 @@ class MappingInfo:
     mode: str = "conversation"
     conversations_total: int = 0
     conversations_empty: int = 0
+    conversations_deleted_skipped: int = 0
     lines_total: int = 0
     lines_dropped_by_role: int = 0
     lines_unassigned: int = 0
@@ -150,8 +151,18 @@ def lines_from_bundle(
     return out
 
 
+def normalize_conversation(c: dict[str, Any]) -> dict[str, Any]:
+    """Accept both shapes: harness fixture ({id, range, parts}) and the golden export
+    ({conversationId, start, end, deleted, segmentCount}, no parts). Without parts, the
+    conversation's time range applies to every recording (recordingId None)."""
+    cid = c.get("id") or c.get("conversationId")
+    rng = c.get("range") or {"start": c["start"], "end": c["end"]}
+    parts = c.get("parts") or [{"recordingId": None, "range": rng}]
+    return {**c, "id": cid, "range": rng, "parts": parts}
+
+
 def _in_part(line: Line, part: dict[str, Any]) -> bool:
-    if line.recording_id != part["recordingId"]:
+    if part["recordingId"] is not None and line.recording_id != part["recordingId"]:
         return False
     return parse_time(part["range"]["start"]) <= line.mid <= parse_time(part["range"]["end"])
 
@@ -202,7 +213,9 @@ def episodes_from_conversations(
     max_chars: int, info: MappingInfo,
 ) -> list[Episode]:
     info.conversations_total = len(conversations)
-    convs = sorted(conversations, key=lambda c: parse_time(c["range"]["start"]))
+    live = [normalize_conversation(c) for c in conversations if not c.get("deleted")]
+    info.conversations_deleted_skipped = len(conversations) - len(live)
+    convs = sorted(live, key=lambda c: parse_time(c["range"]["start"]))
     assigned: set[int] = set()
     out: list[Episode] = []
     for conv in convs:

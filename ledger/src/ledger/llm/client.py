@@ -2,8 +2,15 @@
 
 Config (env): LEDGER_LLM_BASE_URL (e.g. http://host:8000/v1), LEDGER_LLM_API_KEY,
 LEDGER_LLM_MODEL (gap model and state update), LEDGER_LLM_COMPOSER_MODEL (optional; default
-LEDGER_LLM_MODEL), LEDGER_LLM_TIMEOUT (seconds, default 30). With no base URL or model the
-client is NullModel: every call is `unavailable`, and nothing is saved for it.
+LEDGER_LLM_MODEL), LEDGER_LLM_TIMEOUT (seconds, default 30), LEDGER_LLM_SEED (default 0),
+LEDGER_LLM_THINKING (default off). With no base URL or model the client is NullModel: every
+call is `unavailable`, and nothing is saved for it.
+
+Thinking is OFF by default: a reasoning model (Qwen3, ...) on llama.cpp / lemonade otherwise
+spends the whole max_tokens budget in `reasoning_content` and returns `content: null` (seen
+with Qwen3-1.7B on the eval server). The off switch is the chat template flag
+`chat_template_kwargs.enable_thinking=false`, which models without thinking ignore.
+LEDGER_LLM_THINKING=1 leaves it out (then raise the layers' max_tokens).
 
 TEST ONLY: LEDGER_TEST_FAKE_MODEL=1 uses the deterministic FakeModel (as `ledger-day --fake`),
 with LEDGER_TEST_FAKE_SPLIT_MARKER as its split marker. It is refused together with a real
@@ -57,6 +64,8 @@ class HttpModelConfig:
     api_key: str = ""
     timeout: float = 30.0
     transport_retries: int = 2
+    seed: int | None = 0
+    thinking: bool = False
 
 
 def _content(data: dict[str, Any]) -> str:
@@ -67,7 +76,8 @@ def _content(data: dict[str, Any]) -> str:
 
 
 class OpenAICompatModel:
-    """POST {base_url}/chat/completions with JSON output, temperature 0."""
+    """POST {base_url}/chat/completions with JSON output, temperature 0, a fixed seed and no
+    thinking (see the module doc)."""
 
     def __init__(self, config: HttpModelConfig, transport: httpx.AsyncBaseTransport | None = None):
         self.name = config.model
@@ -75,7 +85,7 @@ class OpenAICompatModel:
         self._transport = transport
 
     def _body(self, req: ModelRequest) -> dict[str, Any]:
-        return {
+        body: dict[str, Any] = {
             "model": self._cfg.model,
             "messages": [
                 {"role": "system", "content": req.system},
@@ -85,6 +95,11 @@ class OpenAICompatModel:
             "max_tokens": req.max_tokens,
             "response_format": {"type": "json_object"},
         }
+        if self._cfg.seed is not None:
+            body["seed"] = self._cfg.seed
+        if not self._cfg.thinking:
+            body["chat_template_kwargs"] = {"enable_thinking": False}
+        return body
 
     async def complete(self, req: ModelRequest) -> str:
         url = self._cfg.base_url.rstrip("/") + "/chat/completions"
@@ -142,8 +157,14 @@ def load_models() -> Models:
     if not base or not model:
         return Models(small=NullModel(), composer=NullModel())
     key = os.environ.get("LEDGER_LLM_API_KEY", "")
-    timeout = float(os.environ.get("LEDGER_LLM_TIMEOUT", "30"))
     composer = os.environ.get("LEDGER_LLM_COMPOSER_MODEL", "").strip() or model
-    small_cfg = HttpModelConfig(base_url=base, model=model, api_key=key, timeout=timeout)
-    composer_cfg = HttpModelConfig(base_url=base, model=composer, api_key=key, timeout=timeout)
+    common = {
+        "base_url": base,
+        "api_key": key,
+        "timeout": float(os.environ.get("LEDGER_LLM_TIMEOUT", "30")),
+        "seed": int(os.environ.get("LEDGER_LLM_SEED", "0")),
+        "thinking": os.environ.get("LEDGER_LLM_THINKING", "").strip() == "1",
+    }
+    small_cfg = HttpModelConfig(model=model, **common)
+    composer_cfg = HttpModelConfig(model=composer, **common)
     return Models(small=OpenAICompatModel(small_cfg), composer=OpenAICompatModel(composer_cfg))
