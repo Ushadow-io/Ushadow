@@ -9,7 +9,7 @@ from datetime import datetime
 
 from memory_service.engine.base import EngineEntity, EngineFact, EpisodeResult, MaintainReport
 from memory_service.engine.staged import confidence as conf
-from memory_service.engine.staged import erase
+from memory_service.engine.staged import erase, known_names
 from memory_service.engine.staged.llm import LLM
 from memory_service.engine.staged.m1_review_uncertain import review_uncertain
 from memory_service.engine.staged.m2_merge_duplicate_facts import merge_duplicate_facts
@@ -93,6 +93,12 @@ class StagedEngine:
     async def entity(self, group: str, engine_id: str) -> EngineEntity | None:
         e = await self.store.get_entity(self._ctx(group).group, engine_id)
         return EngineEntity(engine_id=e.id, name=e.name, summary=e.summary or None) if e else None
+
+    async def name_entity(self, group: str, name: str, aliases: list[str],
+                          type_: str | None = None) -> EngineEntity:
+        """A person's word: these names are one entity (see known_names.py). Safe to repeat."""
+        e = await known_names.name_entity(self._ctx(group), name, aliases, type_)
+        return EngineEntity(engine_id=e.id, name=e.name, summary=e.summary or None)
 
     async def entity_facts(self, group: str, engine_id: str) -> list[EngineFact]:
         return await self._out(group, await self.store.entity_facts(self._ctx(group).group, engine_id))

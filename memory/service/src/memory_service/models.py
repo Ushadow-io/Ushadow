@@ -171,6 +171,29 @@ class EraseRequest(ApiModel):
     range: TimeRange
 
 
+class KnownEntityRequest(ApiModel):
+    """A person's word list entry: `name` and its other names are ONE entity (a person, a
+    project, a product; also a spelling the transcript gets wrong)."""
+
+    user_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    aliases: list[str] = Field(default_factory=list)
+    type: str | None = None  # Person | Place | Organization | Thing | Topic | Event | Other
+
+
+class KnownEntityRemove(ApiModel):
+    user_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+
+
+class KnownEntity(ApiModel):
+    id: str  # the human decision that holds it
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    type: str | None = None
+    at: AwareDatetime
+
+
 class SearchFilters(ApiModel):
     kinds: list[FactKind] = Field(default_factory=lambda: [FactKind.knowledge, FactKind.action])
     include_closed: bool = False
@@ -216,9 +239,10 @@ class Decision(ApiModel):
     id: str
     user_id: str
     kind: FactKind
-    op: str  # suppress | assert | suppress_entity
+    op: str  # suppress | assert | suppress_entity | name_entity | unname_entity
     key_hash: str
-    payload: dict[str, Any] | None = None  # assert only: the human's own statement
+    # assert: the human's own statement. name_entity: the human's own name, aliases and type.
+    payload: dict[str, Any] | None = None
     created_at: AwareDatetime
 
 

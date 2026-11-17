@@ -13,6 +13,8 @@ from memory_service.models import (
     EraseReport,
     FactDecision,
     FactKind,
+    KnownEntity,
+    KnownEntityRequest,
     MemoryEntity,
     MemoryFact,
     RebuildReport,
@@ -57,6 +59,12 @@ def _shown(fact_id: str, dec: Decision) -> FactDecision:
         v = p.get("value") or {}
         out.text, out.due, out.direction = v.get("text"), v.get("due"), v.get("direction")
     return out
+
+
+def _known(dec: Decision) -> KnownEntity:
+    p = dec.payload or {}
+    return KnownEntity(id=dec.id, name=p.get("name", ""), aliases=list(p.get("aliases") or []),
+                       type=p.get("type"), at=dec.created_at)
 
 
 class MemoryPort:
@@ -252,6 +260,32 @@ class MemoryPort:
                                                          entity_key(user_id, e.name))))
         await human_wins.reapply(self.d, user_id)
         return decs
+
+    # ---- the word list: known entities -----------------------------------------------------------
+
+    async def name_entity(self, req: KnownEntityRequest) -> KnownEntity:
+        """`name` and `aliases` are one entity from now on, also after a rebuild. A new entry for
+        the same name replaces the old one."""
+        user_id = _need(req.user_id)
+        payload = {"name": req.name.strip(), "type": req.type,
+                   "aliases": sorted({a.strip() for a in req.aliases if a.strip()})}
+        dec = await self._rec(user_id, Ask(FactKind.knowledge, "name_entity",
+                                           entity_key(user_id, req.name), payload))
+        await human_wins.reapply(self.d, user_id)
+        return _known(dec)
+
+    async def known_entities(self, user_id: str) -> list[KnownEntity]:
+        eff = await human_wins.effective(self.d, _need(user_id))
+        return sorted((_known(d) for d in eff.known.values()), key=lambda k: k.name.lower())
+
+    async def unname_entity(self, user_id: str, name: str) -> bool:
+        """Take an entry off the list. Entities already merged stay merged. False: no such entry."""
+        user_id = _need(user_id)
+        key = entity_key(user_id, name)
+        if key not in (await human_wins.effective(self.d, user_id)).known:
+            return False
+        await self._rec(user_id, Ask(FactKind.knowledge, "unname_entity", key))
+        return True
 
     async def erase(self, user_id: str, recording_id: str, rng: TimeRange) -> EraseReport:
         return await erase_svc.erase(self.d, _need(user_id), recording_id, rng)

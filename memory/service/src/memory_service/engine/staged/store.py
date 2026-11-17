@@ -142,7 +142,7 @@ class MemoryGraphStore:
     async def drop_orphan_entities(self, group: str) -> None:
         g = self._g(group)
         used = {i for f in g.facts.values() for i in (f.source_id, f.target_id)}
-        for eid in [eid for eid in g.entities if eid not in used]:
+        for eid in [eid for eid, e in g.entities.items() if eid not in used and not e.named_by_human]:
             del g.entities[eid]
 
     # ---- facts -----------------------------------------------------------------------------------

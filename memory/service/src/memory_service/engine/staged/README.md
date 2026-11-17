@@ -62,6 +62,7 @@ flowchart TD
 | `s5_write.py` | Database: writes everything, records decisions, returns the `EpisodeResult`. |
 | `m1_review_uncertain.py` | Maintenance: deeper review of low-confidence entity matches, found by query. |
 | `m2_merge_duplicate_facts.py` | Maintenance: merge near-duplicate facts of one entity. |
+| `known_names.py` | The word list: a person says a name and its other names are one entity. Makes, merges and renames; such an entity stays without facts. |
 | `erase.py` | `remove_episode`: takes out everything only that episode said (facts, words, names, decisions). |
 | `confidence.py` | Every confidence number, and the read-time fact confidence. |
 | `prompts.py` | All prompts and JSON schemas. |
@@ -110,6 +111,22 @@ Scores come from how a decision was made, not from a number the model invents
 - A decision chain missing at read time counts as 1.0 (`MISSING_DECISION`): erase deletes a
   chain only when nothing reads it, so this is only old data or a partial failure, and a missing
   record should not hide a fact; the fact's own score and other decisions still bound it.
+
+## The word list (known entities)
+
+A person can say: "this name, with these other names, is one thing" (a person, a project, a
+product, or a spelling the transcript gets wrong).
+
+- API: `POST /known-entities` `{userId, name, aliases, type}`, `GET /known-entities?userId=`,
+  `POST /known-entities/remove` `{userId, name}`.
+- The service keeps each entry as a human decision (`name_entity`), outside the engine, and
+  applies the list again after every ingest, erase and rebuild (`services/human_wins.py`).
+- The engine holds one entity for all the names: it makes one, or merges the ones that exist,
+  and gives it the person's name. The match decision becomes human, 1.0.
+- A later episode that says any of the names joins the entity in stage 3 by rule (exact alias),
+  with no model call.
+- Limits: a removed entry stops being applied, but entities already merged stay merged (no
+  undo yet). The list is not yet given to the transcription layer or to the extract prompt.
 
 ## Settings
 

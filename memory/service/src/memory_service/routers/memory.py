@@ -15,6 +15,8 @@ from memory_service.models import (
     FactKind,
     ForgetRequest,
     IngestRequest,
+    KnownEntityRemove,
+    KnownEntityRequest,
     MemoryEntity,
     MemoryFact,
     RebuildReport,
@@ -134,6 +136,27 @@ async def forget(req: ForgetRequest, p: Principal = Depends(require_service),
                  mp: MemoryPort = Depends(port)) -> dict[str, list[dict[str, Any]]]:
     decs = await mp.forget(authorize_user(p, req.user_id), req.fact_ids, req.entity_id)
     return {"decisions": [_dump(d) for d in decs]}
+
+
+@router.get("/known-entities")
+async def known_entities(user_id: str = Query(alias="userId"), p: Principal = Depends(require_service),
+                         mp: MemoryPort = Depends(port)) -> dict[str, list[dict[str, Any]]]:
+    return {"entities": [_dump(k) for k in await mp.known_entities(authorize_user(p, user_id))]}
+
+
+@router.post("/known-entities")
+async def name_entity(req: KnownEntityRequest, p: Principal = Depends(require_service),
+                      mp: MemoryPort = Depends(port)) -> dict[str, Any]:
+    authorize_user(p, req.user_id)
+    return _dump(await mp.name_entity(req))
+
+
+@router.post("/known-entities/remove")
+async def unname_entity(req: KnownEntityRemove, p: Principal = Depends(require_service),
+                        mp: MemoryPort = Depends(port)) -> dict[str, bool]:
+    if not await mp.unname_entity(authorize_user(p, req.user_id), req.name):
+        raise HTTPException(404, "no such known entity")
+    return {"removed": True}
 
 
 @router.post("/erase")

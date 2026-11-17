@@ -109,6 +109,15 @@ class MaintainReport:
 
 
 @runtime_checkable
+class Nameable(Protocol):
+    """Optional engine extra: a person says that a name and its other names are ONE entity.
+    Safe to repeat. An engine without it ignores the list of known entities."""
+
+    async def name_entity(self, group: str, name: str, aliases: list[str],
+                          type_: str | None = None) -> EngineEntity: ...
+
+
+@runtime_checkable
 class Maintainable(Protocol):
     """Optional engine extra: background clean-up, run by the worker only when idle."""
 

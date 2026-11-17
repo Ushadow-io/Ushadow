@@ -26,6 +26,9 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+HUMAN = "human"  # the source of a name a person gave (not an episode id); see known_names.py
+
+
 # ---- input: one episode, whatever its source ------------------------------------------------------
 
 
@@ -140,6 +143,11 @@ class StoredEntity:
         fresh = [s for s in sources if s not in have]
         have += fresh
         return bool(fresh)
+
+    @property
+    def named_by_human(self) -> bool:
+        """On the person's word list: it stays when no fact points at it."""
+        return HUMAN in self.name_sources or any(HUMAN in s for s in self.alias_sources.values())
 
     def forget_episode(self, episode_id: str) -> None:
         """Take an erased episode out of every source list; drop aliases left with none."""

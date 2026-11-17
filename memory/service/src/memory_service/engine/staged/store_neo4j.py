@@ -26,6 +26,7 @@ from typing import Any
 from memory_service.engine.graphiti import GraphitiEngine, _dt
 from memory_service.engine.staged.store import REVIEWABLE
 from memory_service.engine.staged.types import (
+    HUMAN,
     Decision,
     FactKey,
     FactQuery,
@@ -162,8 +163,9 @@ class Neo4jGraphStore:
                       u=entity_id, g=group)
 
     async def drop_orphan_entities(self, group: str) -> None:
-        await self._q("MATCH (n:Entity) WHERE n.group_id = $g AND NOT (n)-[:RELATES_TO]-() DETACH DELETE n",
-                      g=group)
+        await self._q("MATCH (n:Entity) WHERE n.group_id = $g AND NOT (n)-[:RELATES_TO]-() "
+                      "AND NOT $human IN coalesce(n.source_episodes, []) DETACH DELETE n",
+                      g=group, human=HUMAN)  # an entity on the person's word list stays
 
     # ---- facts -----------------------------------------------------------------------------------
 

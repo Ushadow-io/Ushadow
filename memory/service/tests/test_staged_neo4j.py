@@ -157,3 +157,23 @@ async def test_erase_on_neo4j_leaves_no_trace(setup):
     await eng.remove_episode(g, b.engine_episode_id)
     n, text = await _group_text(setup.store, g)
     assert n == 0, text
+
+
+async def test_known_names_on_neo4j(setup):
+    """The word list on the real store: merge, rename, keep without facts, match by alias."""
+    eng, g = setup.eng, setup.group
+    await eng.add_episode(g, episode("k1", [("Sam", "Bob likes Millone."), ("Sam", "Alice works at Acme.")]))
+    known = await eng.name_entity(g, "Mill One", ["Millone", "Themill"], "Organization")
+    again = await eng.name_entity(g, "Mill One", ["Millone", "Themill"], "Organization")
+    assert again.engine_id == known.engine_id and known.name == "Mill One"
+    e = await setup.store.get_entity(g, known.engine_id)
+    assert sorted(e.aliases) == ["Millone", "Themill"] and e.named_by_human
+    assert [f.text for f in await eng.entity_facts(g, known.engine_id)] == ["Bob likes Millone"]
+    head = (await setup.store.current_decisions(g, [e.match_root]))[e.match_root]
+    assert (head.decided_by, head.confidence) == ("human", 1.0)
+
+    for f in await eng.entity_facts(g, known.engine_id):  # no fact left: it still stays
+        await eng.delete_fact(g, f.engine_id)
+    assert (await setup.store.get_entity(g, known.engine_id)) is not None
+    r = await eng.add_episode(g, episode("k2", [("Sam", "Bob likes Themill.")], T0 + DAY))
+    assert r.facts[0].target_entity_id == known.engine_id

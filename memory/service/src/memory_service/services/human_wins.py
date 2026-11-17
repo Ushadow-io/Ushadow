@@ -11,6 +11,7 @@ from typing import Any
 
 from memory_service.actions import ActionFactDraft
 from memory_service.engine import EngineFact, entity_key, knowledge_key
+from memory_service.engine.base import Nameable
 from memory_service.models import Decision, FactKind, Statement
 from memory_service.services.deps import Deps, action_scope, knowledge_fact_id
 from memory_service.textutil import group_id
@@ -23,6 +24,7 @@ class Effective:
     suppressed: set[str] = field(default_factory=set)
     asserted: dict[str, Decision] = field(default_factory=dict)
     blocked_entities: set[str] = field(default_factory=set)
+    known: dict[str, Decision] = field(default_factory=dict)  # the word list: name key -> entry
 
     def hides(self, user_id: str, f: EngineFact) -> bool:
         if knowledge_key(user_id, f.signature()) in self.suppressed:
@@ -42,6 +44,10 @@ async def effective(d: Deps, user_id: str) -> Effective:
             eff.suppressed.discard(dec.key_hash)
         elif dec.op == "suppress_entity":
             eff.blocked_entities.add(dec.key_hash)
+        elif dec.op == "name_entity":
+            eff.known[dec.key_hash] = dec
+        elif dec.op == "unname_entity":
+            eff.known.pop(dec.key_hash, None)
     return eff
 
 
@@ -71,6 +77,18 @@ async def drop_fact(d: Deps, user_id: str, fact_id: str) -> None:
         await d.engine.delete_fact(group, eid)
     await d.tables.registry.delete(user_id, fact_id)
     await d.tables.proofs.delete_for_fact(user_id, fact_id)
+
+
+async def _apply_names(d: Deps, user_id: str, eff: Effective) -> None:
+    """The word list: each entry is one entity in the engine, whatever was ingested or erased
+    since. Before the facts, so a blocked entity is found under its final name."""
+    if not isinstance(d.engine, Nameable):
+        return
+    for dec in eff.known.values():
+        p = dec.payload or {}
+        if p.get("name"):
+            await d.engine.name_entity(group_id(user_id), p["name"], list(p.get("aliases") or []),
+                                       p.get("type"))
 
 
 async def _apply_knowledge(d: Deps, user_id: str, eff: Effective) -> int:
@@ -114,4 +132,5 @@ async def _apply_actions(d: Deps, user_id: str, eff: Effective) -> int:
 async def reapply(d: Deps, user_id: str) -> int:
     """Make the engine and the action store agree with the human decisions. Gives the changes."""
     eff = await effective(d, user_id)
+    await _apply_names(d, user_id, eff)
     return await _apply_knowledge(d, user_id, eff) + await _apply_actions(d, user_id, eff)
