@@ -244,3 +244,11 @@ def test_invalid_bundle_fails_loudly_without_leaking_values():
         egd.validate_bundle(bundle, egd.load_schema(SCHEMA))
     assert "bogus" not in str(err.value) and "SECRET" not in str(err.value)
     assert "origin" in str(err.value)
+
+
+def test_generic_label_is_not_a_name():
+    import export_golden_days as ex
+
+    for label in ("Speaker 0", "speaker_12", "unknown", "3"):
+        assert ex.GENERIC_LABEL.match(label)
+    assert not ex.GENERIC_LABEL.match("Ann")

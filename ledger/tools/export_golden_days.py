@@ -44,6 +44,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -55,6 +56,8 @@ UTC = timezone.utc
 HERE = Path(__file__).resolve().parent
 DEFAULT_SCHEMA = Path.home() / "repos" / "life-datatypes" / "schema" / "conversation.json"
 UNKNOWN_SPEAKER = "unknown"
+# "Speaker 3", "unknown", "7": a diarization label, not a person's name.
+GENERIC_LABEL = re.compile(r"^(speaker[ _-]?\d+|unknown.*|\d+)$", re.IGNORECASE)
 
 # Chronicle Conversation.EndReason -> life-datatypes CutReason
 END_REASON_TO_CUT = {
@@ -268,7 +271,10 @@ def map_conversation(
         start = offset_to_absolute(conv, rel_start, rec_start)
         end = max(offset_to_absolute(conv, rel_end, rec_start), start)
         label = (raw.get("speaker") or "").strip() or UNKNOWN_SPEAKER
+        # Chronicle writes the identified name to `identified_as`, or over `speaker` itself.
         name = (raw.get("identified_as") or "").strip() or None
+        if name is None or name.casefold() == "unknown":
+            name = None if GENERIC_LABEL.match(label) else label
         seg: dict[str, Any] = {
             "id": f"{conv.id}:{revision}:{n:05d}",
             "text": raw.get("text") or "",

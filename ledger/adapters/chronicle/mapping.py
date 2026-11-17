@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -125,6 +126,17 @@ def absolute_time(ranges: List[Dict[str, Any]], offset: float,
     return None
 
 
+_GENERIC_LABEL = re.compile(r"^(speaker[ _-]?\d+|unknown.*|\d+)$", re.IGNORECASE)
+
+
+def speaker_name(seg: Dict[str, Any], label: str) -> Optional[str]:
+    """The identified name. Chronicle writes it to `identified_as`, or over `speaker` itself."""
+    name = str(seg.get("identified_as") or "").strip()
+    if name and name.lower() != "unknown":
+        return name
+    return None if _GENERIC_LABEL.match(label.strip()) else (label.strip() or None)
+
+
 def _speaker_label(seg: Dict[str, Any]) -> str:
     raw = seg.get("speaker")
     if raw is None or raw == "":
@@ -151,7 +163,7 @@ def _map_segments(raw: List[Dict[str, Any]], ranges, owner_names: List[str], seg
             continue
         if end < start:
             end = start
-        name = seg.get("identified_as") or None
+        name = speaker_name(seg, label)
         sp = speakers.setdefault(label, {"label": label, "role": "unknown"})
         if name:
             sp["displayName"] = str(name)
