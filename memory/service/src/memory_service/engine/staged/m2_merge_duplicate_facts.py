@@ -73,6 +73,7 @@ async def merge_facts(ctx: Ctx, p: _Pair, by: str) -> bool:
     for ep, words in drop.variants.items():
         keep.say(ep, words)
     keep.confidence = max(keep.confidence, drop.confidence)
+    keep.heard = "known" if "known" in (keep.heard, drop.heard) else "unknown"
     if drop.valid_at and (keep.valid_at is None or drop.valid_at < keep.valid_at):
         keep.valid_at = drop.valid_at
     await ctx.store.update_fact(ctx.group, keep)

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from memory_service.engine.staged import prompts
+from memory_service.engine.staged import prompts, s1b_tidy
 from memory_service.engine.staged.llm import LLMError
 from memory_service.engine.staged.types import Ctx, Extraction, NewEntity, NewFact, SourceLine
 from memory_service.models import EpisodeInput
@@ -49,11 +49,10 @@ def chunk_lines(lines: list[SourceLine], budget: int) -> list[list[SourceLine]]:
 
 
 async def extract(ctx: Ctx, inp: ExtractInput) -> Extraction:
-    ext = Extraction(lines=list(inp.lines))
+    ext = Extraction(lines=list(inp.lines), owner=s1b_tidy.owner_name(ctx),
+                     owner_names=s1b_tidy.owner_names(ctx, inp.lines))
     for chunk in chunk_lines(inp.lines, ctx.cfg.chunk_chars):
         await _extract_chunk(ctx, ext, chunk, inp.reference_time)
-    used = {k for f in ext.facts for k in (f.subject, f.object)}
-    ext.entities = {k: e for k, e in ext.entities.items() if k in used}  # no fact, nothing to store
     return ext
 
 
@@ -63,7 +62,7 @@ async def _extract_chunk(ctx: Ctx, ext: Extraction, chunk: list[SourceLine], at:
     got too long) is tried again one time as two halves, so one bad chunk does not lose the episode."""
     payload = [{"ref": ln.ref, "rendered": ln.render(), "text": ln.text} for ln in chunk]
     try:
-        answer = await ctx.llm.ask(prompts.extract_request(payload, at.isoformat()))
+        answer = await ctx.llm.ask(prompts.extract_request(payload, at.isoformat(), ext.owner))
     except LLMError:
         if not retry or len(chunk) < 2:
             raise
@@ -92,26 +91,39 @@ def _when(v: Any) -> datetime | None:
 
 
 def _entity_key(ext: Extraction, name: str, type_: str = "Entity") -> str:
-    """The episode key for a name: an entity already named so (or aliased so), else a new one."""
+    """The episode key for a name: an entity already named so (or aliased so), else a new one.
+    Every name that means the user gives the one owner entity."""
     key = norm(name)
+    if key in ext.owner_names and key != norm(ext.owner):
+        owner = _entity_key(ext, ext.owner, "Person")
+        _add_alias(ext.entities[owner], name)
+        return owner
     for e in ext.entities.values():
         if key == e.key or key in {norm(a) for a in e.aliases}:
             return e.key
+    if key in ext.owner_names:
+        type_ = "Person"
     ext.entities[key] = NewEntity(key=key, name=name, type=type_ or "Entity")
     return key
+
+
+def _add_alias(e: NewEntity, alias: Any) -> None:
+    """A real other name only: never "I" or "the owner"."""
+    said = norm(alias) if isinstance(alias, str) else ""
+    if said and said not in s1b_tidy.OWNER_WORDS and said not in {norm(n) for n in e.names()}:
+        e.aliases.append(alias.strip())
 
 
 def _add_entity(ext: Extraction, item: dict[str, Any]) -> None:
     name = _text(item.get("name"))
     if not norm(name):
         return
-    key = _entity_key(ext, name, _text(item.get("type")))
-    e = ext.entities[key]
-    have = {norm(n) for n in e.names()}
-    for alias in item.get("aliases") or []:
-        if isinstance(alias, str) and norm(alias) and norm(alias) not in have:
-            e.aliases.append(alias.strip())
-            have.add(norm(alias))
+    aliases = [a for a in item.get("aliases") or [] if isinstance(a, str)]
+    if any(norm(a) in ext.owner_names for a in aliases):  # the model says this name is the user
+        aliases, name = [*aliases, name], ext.owner
+    e = ext.entities[_entity_key(ext, name, _text(item.get("type")))]
+    for alias in aliases:
+        _add_alias(e, alias)
 
 
 _RANGE = re.compile(r"^\D*(\d+)\s*(?:-|–|to)\s*\D*(\d+)\D*$")
@@ -160,8 +172,13 @@ def _add_fact(ctx: Ctx, ext: Extraction, item: dict[str, Any], chunk: list[Sourc
     if not lines:  # nothing to prove it with
         ctx.tally["facts_dropped_no_line"] += 1
         return
-    new = NewFact(subject=_entity_key(ext, subject), relation=norm(relation), object=_entity_key(ext, obj),
-                  text=_text(item.get("fact")) or f"{subject} {relation} {obj}", line_refs=lines,
+    s_key, o_key = _entity_key(ext, subject), _entity_key(ext, obj)
+    text = _text(item.get("fact")) or f"{subject} {relation} {obj}"
+    for said, key in ((subject, s_key), (obj, o_key)):  # the user has ONE name in the sentence too
+        if key == norm(ext.owner) and norm(said) != key:
+            text = (s1b_tidy.owner_text(ext, text) if norm(said) in s1b_tidy.OWNER_WORDS
+                    else text.replace(said, ext.owner))
+    new = NewFact(subject=s_key, relation=norm(relation), object=o_key, text=text, line_refs=lines,
                   valid_at=_when(item.get("valid_from")), invalid_at=_when(item.get("valid_until")),
                   quote=_text(item.get("quote")) or None)
     same = next((f for f in ext.facts if f.key == new.key), None)

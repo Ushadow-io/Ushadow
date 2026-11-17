@@ -65,6 +65,12 @@ services:
       - MEMORY_MIN_OWNER_WORDS=${MEMORY_MIN_OWNER_WORDS:-20}
       # true: a conversation with no owner voice makes no facts (see LEDGER_OWNER_NAMES)
       - MEMORY_OWNER_CONVERSATIONS_ONLY=${MEMORY_OWNER_CONVERSATIONS_ONLY:-true}
+      # Staged engine: the name facts use for the user ("" = "Owner"), and other names that mean
+      # the user (comma list). Facts heard only from unknown speakers score 0.5: set
+      # MEMORY_MIN_CONFIDENCE=0.6 to leave them out of facts() and search().
+      - MEMORY_OWNER_NAME=${MEMORY_OWNER_NAME:-}
+      - MEMORY_OWNER_ALIASES=${MEMORY_OWNER_ALIASES:-}
+      - MEMORY_MIN_CONFIDENCE=${MEMORY_MIN_CONFIDENCE:-0}
       # Lease on a running work unit, seconds.
       - MEMORY_LEASE_SECONDS=${MEMORY_LEASE_SECONDS:-600}
       # Background worker: every N seconds, per known user, sync with the ledger and retry failed

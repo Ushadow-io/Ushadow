@@ -10,6 +10,7 @@ flowchart TD
 
     subgraph PER_EPISODE[Per episode]
         S1["1 Extract<br/>MODEL: one call per chunk<br/>entities + facts + line refs"]
+        S1B["1b Tidy<br/>CODE: one owner entity with the set name,<br/>one fact per sentence, no part-facts,<br/>source score (who said it)"]
         S2["2 Candidates<br/>DATABASE: exact name/alias,<br/>top-k similar names, their known facts"]
         S3{"3 Match entities<br/>CODE"}
         S3M["MODEL: ONE call for all<br/>unclear entities<br/>(no conversation text)"]
@@ -17,7 +18,7 @@ flowchart TD
         S4M["MODEL: collection = one call<br/>per_fact = one call per fact<br/>(no conversation text)"]
         S5["5 Write<br/>DATABASE: entities, facts, support,<br/>closures, decision records"]
 
-        S1 --> S2 --> S3
+        S1 --> S1B --> S2 --> S3
         S3 -- "exact name/alias: same (1.0)" --> S4
         S3 -- "similarity >= high: same" --> S4
         S3 -- "similarity < low: new" --> S4
@@ -54,6 +55,7 @@ flowchart TD
 | `pipeline.py` | `StagedEngine`. `add_episode` lists the five stages in order; `maintain` runs m1 then m2; the rest of the port. |
 | `types.py` | The dataclasses passed between stages (lines, extraction, stored entity/fact/episode, decisions). |
 | `s1_extract.py` | Model: chunk the lines by a character budget, one call per chunk, merge by normalised name. |
+| `s1b_tidy.py` | Code: every name for the user is one entity (`MEMORY_OWNER_NAME`); a sentence given for several pairs is one fact; a fact that repeats a part of a longer one is dropped; each fact gets a source score. |
 | `s2_candidates.py` | Database: candidate stored entities (exact + similar) with a few known facts each. |
 | `s3_match_entities.py` | Code decides clear cases; one model call for all unclear entities. |
 | `s4_reconcile_facts.py` | Code finds exact duplicates; the model judges the rest (collection or per_fact). |
@@ -86,13 +88,19 @@ Scores come from how a decision was made, not from a number the model invents
 | deeper review decided (same / distinct) | 0.9 |
 | deeper review inconclusive | 0.4 (not asked again) |
 | human | 1.0, never reviewed |
+| who said it: the owner or a recognised speaker | 1.0 |
+| who said it: only speakers with an unknown role (a person in the room, or a TV) | 0.5 |
 
 - A decision is never changed. A later one (review, human) supersedes it in the same chain
   (`root`, `supersedes`); the newest of a chain is the current one.
 - "Uncertain" is not stored. It is a current entity-match decision with
   `confidence < MEMORY_REVIEW_BELOW`.
+- A fact's own score is the minimum of its reconcile decision and "who said it" (its best
+  line counts). With `MEMORY_MIN_CONFIDENCE=0.6`, facts heard only from unknown speakers are
+  left out of `facts()` and `search()`; they stay stored, and a later episode where a known
+  speaker says the same raises the score.
 - A fact's confidence (`EngineFact.confidence`, a new optional field; other engines leave it
-  `None`) is computed when read: the minimum of the fact's own reconcile score, the match
+  `None`) is computed when read: the minimum of the fact's own score, the match
   decisions that linked its subject and object in that episode, and the decisions that created
   those two entities. Resolving an entity therefore changes its facts' scores without rewriting
   them.
@@ -110,6 +118,8 @@ Scores come from how a decision was made, not from a number the model invents
 | `MEMORY_ENGINE` | `graphiti` | `staged` selects this engine |
 | `MEMORY_STAGED_STORE` | `neo4j` | `neo4j` or `memory` (tests, demos) |
 | `MEMORY_FACT_RECONCILE` | `collection` | `collection`: one reconcile call per episode; `per_fact`: one per fact |
+| `MEMORY_OWNER_NAME` | (empty) | the user's name in every fact, e.g. `Stu`; empty = `Owner` |
+| `MEMORY_OWNER_ALIASES` | (empty) | comma list of other names that mean the user (full name, nickname). The speaker label of owner lines counts by itself |
 | `MEMORY_STAGED_CHUNK_CHARS` | 6000 | extraction chunk budget (cut at line boundaries) |
 | `MEMORY_STAGED_SAME_ABOVE` | 0.93 | name similarity at or above: same entity, no model |
 | `MEMORY_STAGED_NEW_BELOW` | 0.80 | name similarity below: new entity, no model |

@@ -44,7 +44,7 @@ _FACT = """e.uuid AS id, s.uuid AS source_id, t.uuid AS target_id,
     coalesce(e.invalid_at, e.expired_at) AS invalid_at, e.episodes AS episodes,
     e.decided_by AS decided_by, e.created_at AS created_at, e.confidence AS confidence,
     e.source_match AS source_match, e.target_match AS target_match,
-    e.variants AS variants, e.text_episode AS text_episode"""
+    e.variants AS variants, e.text_episode AS text_episode, e.heard AS heard"""
 _EDGE = "MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity) WHERE e.group_id = $g"
 _OPEN = "e.invalid_at IS NULL AND e.expired_at IS NULL"
 _CURRENT = """MATCH (d:StagedDecision) WHERE d.group_id = $g {where}
@@ -76,13 +76,15 @@ def _fact(r: dict[str, Any]) -> StoredFact:
                       human=r.get("decided_by") == "human", created_at=_dt(r["created_at"]),  # type: ignore[arg-type]
                       confidence=1.0 if r.get("confidence") is None else float(r["confidence"]),
                       source_match=r.get("source_match"), target_match=r.get("target_match"),
-                      variants=json.loads(r.get("variants") or "{}"), text_episode=r.get("text_episode"))
+                      variants=json.loads(r.get("variants") or "{}"), text_episode=r.get("text_episode"),
+                      heard=r.get("heard") or "known")
 
 
 def _words(f: StoredFact) -> dict[str, Any]:
     """The fact's shown words and each supporting episode's words (JSON: no map properties)."""
     return {"fact": f.text, "source_name": f.source_name, "target_name": f.target_name,
-            "variants": json.dumps(f.variants, sort_keys=True), "text_episode": f.text_episode}
+            "variants": json.dumps(f.variants, sort_keys=True), "text_episode": f.text_episode,
+            "heard": f.heard}
 
 
 def _decision(props: dict[str, Any]) -> Decision:

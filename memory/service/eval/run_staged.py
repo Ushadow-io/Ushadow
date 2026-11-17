@@ -7,7 +7,11 @@ Episodes: one per conversation of `<day>.expected.json`, built by IMPORTING the 
 
     cd memory/service
     uv run python eval/run_staged.py --bundle-dir DIR --day 2026-01-05 --group staged-eval-1 \\
-        --reconcile collection --out eval/out/2026-01-05-collection [--fresh] [--maintain-budget 20]
+        --reconcile collection --out eval/out/2026-01-05-collection [--fresh] [--maintain-budget 20] \\
+        [--owner-name Stu] [--min-owner-words 20]
+    # --owner-name: lines of that speaker get the role owner (as the Chronicle adapter does with
+    # LEDGER_OWNER_NAMES), facts call the user by that name, and a conversation where the owner
+    # said fewer than --min-owner-words words is skipped (the service's owner gate).
     # --stub: in-memory store and a scripted fake model (no network), for trying the script.
 
 Real mode reads MEMORY_LLM_* / MEMORY_EMBED_* / MEMORY_NEO4J_* and the MEMORY_STAGED_* settings.
@@ -31,11 +35,13 @@ from memory_service.engine.staged import confidence as conf
 from memory_service.engine.staged.factory import make_staged_engine
 from memory_service.engine.staged.llm import LLMRequest
 from memory_service.models import EpisodeInput, EpisodeLine
+from memory_service.textutil import norm
 
 SPIKE = Path(__file__).resolve().parents[2] / "spike"
 
 
-def build_episodes(bundle_dir: Path, day: str) -> list[EpisodeInput]:
+def build_episodes(bundle_dir: Path, day: str, owners: frozenset[str] = frozenset()) -> list[EpisodeInput]:
+    """`owners`: normalised speaker names that are the user; their lines get the role owner."""
     sys.path.insert(0, str(SPIKE))
     from s1.episodes import build_episodes as spike_build  # type: ignore[import-not-found]
     from s1.episodes import load_json, pick_transcripts  # type: ignore[import-not-found]
@@ -47,7 +53,8 @@ def build_episodes(bundle_dir: Path, day: str) -> list[EpisodeInput]:
     eps, _ = spike_build(bundle, expected, day, max_chars=0)
     return [EpisodeInput(name=ep.episode_id, reference_time=ep.reference_time, lines=[
         EpisodeLine(recording_id=ln.recording_id, transcript_revision=revision[ln.recording_id],
-                    start=ln.start, end=ln.end, speaker=ln.speaker, role=ln.role, text=ln.text)
+                    start=ln.start, end=ln.end, speaker=ln.speaker, text=ln.text,
+                    role="owner" if norm(ln.speaker) in owners else ln.role)
         for ln in ep.lines]) for ep in eps]
 
 
@@ -77,6 +84,12 @@ def stub_llm() -> FakeLLM:
                     "reconcile": each({"answer": "new", "known_ids": [], "certainty": "medium"}),
                     "review": lambda r: {"answer": "distinct", "candidate": None, "certainty": "high"},
                     "dup_facts": each({"same": False})}, model="stub")
+
+
+def owner_gate(eps: list[EpisodeInput], min_words: int) -> list[EpisodeInput]:
+    """The service's owner gate: keep a conversation only if the owner said enough words."""
+    return [ep for ep in eps
+            if sum(len(ln.text.split()) for ln in ep.lines if ln.role == "owner") >= max(min_words, 1)]
 
 
 # ---- running and counting -------------------------------------------------------------------------
@@ -144,7 +157,9 @@ def write_report(out: Path, m: dict[str, Any]) -> None:
             for k, v in m["stages"].items()]
     g = m["graph"]
     lines = [f"# Staged engine run: {m['day']} ({m['reconcile']})", "",
-             f"Episodes {m['episodes']}, failures {sum(m['failures'].values())} {m['failures'] or ''}", "",
+             f"Episodes {m['episodes']} (skipped by the owner gate {m['episodes_skipped_owner_gate']}), "
+             f"lines {m['lines']} (by the owner {m['lines_by_owner']}), "
+             f"failures {sum(m['failures'].values())} {m['failures'] or ''}", "",
              "| stage | calls | input tokens | output tokens | seconds |", "|---|---|---|---|---|", *rows, "",
              f"Entities {g['entities']}, facts {g['facts']}, closed {g['facts_closed']}, "
              f"entities uncertain {g['entities_uncertain']}", "",
@@ -165,20 +180,30 @@ async def main(argv: list[str] | None = None) -> dict[str, Any]:
     p.add_argument("--stub", action="store_true", help="in-memory store + scripted model, no network")
     p.add_argument("--fresh", action="store_true", help="clear the group first")
     p.add_argument("--maintain-budget", type=int, default=0, help="model calls for maintenance after")
+    p.add_argument("--owner-name", default="", help="the user's speaker name (else MEMORY_OWNER_NAME)")
+    p.add_argument("--min-owner-words", type=int, default=20, help="owner gate, used with an owner name")
     a = p.parse_args(argv)
     check_out_dir(a.out)
     settings = replace(StagedSettings.from_env(), fact_reconcile=a.reconcile, maintain_inline=False)
+    if a.owner_name:
+        settings = replace(settings, owner_name=a.owner_name)
+    owners = frozenset(norm(n) for n in (settings.owner_name, *settings.owner_aliases) if norm(n))
     if a.stub:
         eng = StagedEngine(MemoryGraphStore(), stub_llm(), replace(settings, store="memory"))
     else:
         eng = make_staged_engine(settings)
     if a.fresh:
         await eng.clear(a.group)
-    eps = build_episodes(a.bundle_dir, a.day)
-    print(f"day {a.day}: {len(eps)} episodes, reconcile={a.reconcile}", flush=True)
+    found = build_episodes(a.bundle_dir, a.day, owners)
+    eps = owner_gate(found, a.min_owner_words) if owners else found
+    print(f"day {a.day}: {len(eps)} episodes ({len(found) - len(eps)} skipped by the owner gate), "
+          f"reconcile={a.reconcile}", flush=True)
     t0 = time.perf_counter()
     failures = await run_episodes(eng, a.group, eps)
+    lines = [ln for ep in eps for ln in ep.lines]
     m: dict[str, Any] = {"day": a.day, "reconcile": a.reconcile, "episodes": len(eps), "failures": failures,
+                         "episodes_skipped_owner_gate": len(found) - len(eps), "lines": len(lines),
+                         "lines_by_owner": sum(1 for ln in lines if ln.role == "owner"),
                          "wall_seconds": round(time.perf_counter() - t0, 2),
                          "settings": asdict(settings), "model": eng.llm.model}
     m["maintenance"] = await maintain(eng, a.group, a.maintain_budget)
@@ -187,8 +212,10 @@ async def main(argv: list[str] | None = None) -> dict[str, Any]:
     (a.out / "metrics.json").write_text(json.dumps(m, indent=2, default=str), encoding="utf-8")
     with (a.out / "facts.jsonl").open("w", encoding="utf-8") as fh:  # private: only under --out
         for f in await eng.facts(a.group):
-            fh.write(json.dumps({"id": f.engine_id, "text": f.text, "closed": f.closed,
-                                 "confidence": f.confidence, "episodes": len(f.episodes)}) + "\n")
+            fh.write(json.dumps({"id": f.engine_id, "text": f.text, "subject": f.source,
+                                 "relation": f.relation, "object": f.target, "closed": f.closed,
+                                 "confidence": f.confidence, "heard": f.heard,
+                                 "episodes": len(f.episodes)}) + "\n")
     write_report(a.out, m)
     t = m["stages"]["total"]
     print(f"total calls={t['calls']} tokens={t['input_tokens']}+{t['output_tokens']} "

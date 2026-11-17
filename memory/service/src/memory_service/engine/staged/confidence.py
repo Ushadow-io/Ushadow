@@ -6,8 +6,9 @@ A score in 0..1 comes mostly from HOW a decision was made, not from a number the
   contradicts, MODEL_INCONCLUSIVE for inconclusive); when the model also gives its coarse
   certainty (high/medium/low), the fixed CERTAINTY value is used instead;
 - the deeper review (with the conversation lines) gives REVIEW_* values.
+A fact's own confidence is min(its reconcile decision, who said it: SOURCE_*).
 A fact's effective confidence is computed at read time:
-min(its own reconcile confidence, the current match decisions of its subject and object).
+min(its own confidence, the current match decisions of its subject and object).
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
     from memory_service.engine.staged.store import GraphStore
     from memory_service.engine.staged.types import StoredFact
 
-POLICY_VERSION = "staged-1"  # bump when these numbers or the rules change
+POLICY_VERSION = "staged-2"  # bump when these numbers or the rules change
 
 EXACT = 1.0  # exact normalised name or alias
 NO_CANDIDATE = 1.0  # nothing in the store looks like it: certainly new
@@ -35,6 +36,11 @@ REVIEW_INCONCLUSIVE = 0.4  # the deeper review could not tell either (not asked 
 # a partial failure. It counts as "no evidence against": the fact's own score and the other
 # decisions still bound the result, and a missing record must not hide a fact a person relies on.
 MISSING_DECISION = 1.0
+# Who said it. A fact is as sure as its best line: the owner or a recognised speaker is a real
+# person in the talk; an unknown speaker can be a person in the room, or a TV.
+SOURCE_KNOWN = 1.0
+SOURCE_UNKNOWN = 0.5
+KNOWN_ROLES = frozenset({"owner", "participant"})
 BANDS = ((0.4, "<0.4"), (0.6, "0.4-0.6"), (0.8, "0.6-0.8"), (1.01, ">=0.8"))
 
 
@@ -53,6 +59,15 @@ def similar_new(best: float | None, new_below: float) -> float:
 def model_answer(answer: dict[str, Any], fixed: float) -> float:
     """A decided model answer: its coarse certainty if it gave one, else the fixed setting."""
     return CERTAINTY.get(str(answer.get("certainty") or "").lower(), fixed)
+
+
+def source(roles: Iterable[str]) -> float:
+    return SOURCE_KNOWN if any(r in KNOWN_ROLES for r in roles) else SOURCE_UNKNOWN
+
+
+def heard(score: float) -> str:
+    """The label shown with a fact, so facts from unknown speakers can be told apart."""
+    return "known" if score >= SOURCE_KNOWN else "unknown"
 
 
 def band(score: float) -> str:

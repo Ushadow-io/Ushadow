@@ -78,6 +78,7 @@ class NewFact:
     valid_at: datetime | None = None
     invalid_at: datetime | None = None
     quote: str | None = None
+    source: float = 1.0  # who said it (stage 1b): 1.0 owner or a known speaker, low if unknown only
 
     @property
     def key(self) -> tuple[str, str, str]:
@@ -90,6 +91,8 @@ class Extraction:
     entities: dict[str, NewEntity] = field(default_factory=dict)
     facts: list[NewFact] = field(default_factory=list)
     chunks: int = 0
+    owner: str = "Owner"  # the name every fact uses for the user
+    owner_names: frozenset[str] = frozenset()  # normalised names that mean the user (stage 1b)
 
     def line(self, ref: str) -> SourceLine | None:
         return next((ln for ln in self.lines if ln.ref == ref), None)
@@ -172,6 +175,7 @@ class StoredFact:
     human: bool = False
     created_at: datetime = field(default_factory=utcnow)
     confidence: float = 1.0  # its own reconcile decision; entity scores are added at read time
+    heard: str = "known"  # known: the owner or a recognised speaker said it | unknown: nobody known did
     source_match: str | None = None  # root of the match decision that linked its subject
     target_match: str | None = None
     variants: dict[str, list[str]] = field(default_factory=dict)
@@ -204,7 +208,7 @@ class StoredFact:
                           target=self.target_name, text=self.text, valid_at=self.valid_at,
                           invalid_at=self.invalid_at, episodes=list(self.episodes), human=self.human,
                           source_entity_id=self.source_id, target_entity_id=self.target_id,
-                          hints=list(hints or []), confidence=confidence)
+                          hints=list(hints or []), confidence=confidence, heard=self.heard)
 
 
 @dataclass

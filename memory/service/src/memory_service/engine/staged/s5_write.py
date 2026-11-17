@@ -115,13 +115,16 @@ async def _close(ctx: Ctx, fact_id: str, at: datetime) -> bool:
     return True
 
 
-async def _support(ctx: Ctx, d: FactDecision, ep: StoredEpisode, words: list[str]) -> StoredFact | None:
+async def _support(ctx: Ctx, d: FactDecision, ep: StoredEpisode, words: list[str],
+                   source: float) -> StoredFact | None:
     old = await ctx.store.get_fact(ctx.group, d.ids[0])
     if old is not None:
         if ep.id not in old.episodes:
             old.episodes.append(ep.id)
         old.say(ep.id, words)
-        old.confidence = max(old.confidence, d.confidence)  # said again: at least as sure
+        old.confidence = max(old.confidence, min(d.confidence, source))
+        if conf.heard(source) == "known":  # a known speaker now says it too
+            old.heard = "known"  # said again: at least as sure
         await ctx.store.update_fact(ctx.group, old)
     return old
 
@@ -131,13 +134,14 @@ async def _one_fact(ctx: Ctx, inp: WriteInput, d: FactDecision, ep: StoredEpisod
     f = inp.ext.facts[d.index]
     # this episode's own words: the names as said here, not the stored entity's name
     words = [f.text, inp.ext.entities[f.subject].name, inp.ext.entities[f.object].name]
-    if d.outcome == "duplicate" and (old := await _support(ctx, d, ep, words)) is not None:
+    if d.outcome == "duplicate" and (old := await _support(ctx, d, ep, words, f.source)) is not None:
         return old, []
     s, o = ends[f.subject], ends[f.object]
     new = StoredFact(id=new_id(), source_id=s.id, target_id=o.id, source_name=words[1], target_name=words[2],
                      relation=f.relation, text=f.text, valid_at=_valid_at(inp, f),
                      invalid_at=f.invalid_at, episodes=[ep.id], created_at=ctx.clock(),
-                     confidence=d.confidence, source_match=s.match, target_match=o.match,
+                     confidence=min(d.confidence, f.source),  # the decision, and who said it
+                     heard=conf.heard(f.source), source_match=s.match, target_match=o.match,
                      variants={ep.id: words}, text_episode=ep.id)
     await ctx.store.create_fact(ctx.group, new)
     at = new.valid_at or inp.reference_time

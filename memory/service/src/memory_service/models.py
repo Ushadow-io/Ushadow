@@ -195,6 +195,11 @@ class MemoryFact(ApiModel):
     direction: str | None = None
     due: str | None = None
     sensitivity: str | None = None
+    # Beta: how sure the engine is (0..1), and whether the owner or a recognised speaker said it
+    # ("known") or only unknown speakers did ("unknown": a person in the room, or a TV). A screen
+    # shows "unknown" facts in a different style so they can be judged. None = the engine tells none.
+    confidence: float | None = None
+    heard: str | None = None
 
 
 class MemoryEntity(ApiModel):

@@ -30,6 +30,8 @@ class EngineFact:
     hints: list[EvidenceRef] = field(default_factory=list)
     # 0..1, from how the engine decided (staged engine only; None = the engine gives none).
     confidence: float | None = None
+    # known | unknown: did the owner or a recognised speaker say it (staged engine; None = not told)
+    heard: str | None = None
 
     @property
     def closed(self) -> bool:

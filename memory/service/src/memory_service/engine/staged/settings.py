@@ -33,6 +33,8 @@ class StagedSettings:
     maintain: bool = True  # background maintenance on/off (worker, idle ticks only)
     maintain_inline: bool = False  # run one maintenance batch right after each episode (dev/test)
     maintain_budget: int = 5  # model calls per maintenance batch
+    owner_name: str = ""  # the user's name in every fact ("" = "Owner")
+    owner_aliases: tuple[str, ...] = ()  # other names that mean the user (full name, nickname)
 
     def __post_init__(self) -> None:
         if self.fact_reconcile not in RECONCILE_MODES:
@@ -61,4 +63,7 @@ class StagedSettings:
             maintain=_flag(e.get("MEMORY_MAINTAIN"), d.maintain),
             maintain_inline=_flag(e.get("MEMORY_MAINTAIN_INLINE"), d.maintain_inline),
             maintain_budget=int(e.get("MEMORY_MAINTAIN_BUDGET") or d.maintain_budget),
+            owner_name=(e.get("MEMORY_OWNER_NAME") or d.owner_name).strip(),
+            owner_aliases=tuple(a.strip() for a in (e.get("MEMORY_OWNER_ALIASES") or "").split(",")
+                                if a.strip()),
         )

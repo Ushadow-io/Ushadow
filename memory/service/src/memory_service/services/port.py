@@ -97,7 +97,8 @@ class MemoryPort:
                           about=[ENTITY_PREFIX + e for e in (f.source_entity_id, f.target_entity_id)
                                  if e],
                           valid_at=f.valid_at, invalid_at=f.invalid_at,
-                          source="person" if f.human else "agent", evidence=proofs)
+                          source="person" if f.human else "agent", evidence=proofs,
+                          confidence=f.confidence, heard=f.heard)
 
     @staticmethod
     def _action(user_id: str, a: ActionFact) -> MemoryFact:

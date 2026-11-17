@@ -58,40 +58,63 @@ def extract_schema(refs: list[str]) -> dict[str, Any]:
 
 EXTRACT_SCHEMA = extract_schema([])  # the shape, without a chunk's REFs
 
-_EXTRACT_EXAMPLE = _dump({
-    "entities": [{"name": "Owner", "type": "Person", "aliases": []},
-                 {"name": "Acme Ltd", "type": "Organization", "aliases": ["Acme"]}],
-    "facts": [{"subject": "Owner", "relation": "works at", "object": "Acme Ltd",
-               "fact": "The owner works at Acme Ltd.", "valid_from": None, "valid_until": None,
-               "lines": ["L2"], "quote": "I work at Acme"}]})
+def _extract_example(owner: str) -> str:
+    return _dump({
+        "entities": [{"name": owner, "type": "Person", "aliases": []},
+                     {"name": "guitar", "type": "Thing", "aliases": []},
+                     {"name": "Dana Reed", "type": "Person", "aliases": ["Dana"]},
+                     {"name": "Leeds", "type": "Place", "aliases": []}],
+        "facts": [{"subject": owner, "relation": "plays", "object": "guitar",
+                   "fact": f"{owner} plays the guitar.", "valid_from": None, "valid_until": None,
+                   "lines": ["L2"], "quote": "I play the guitar"},
+                  {"subject": "Dana Reed", "relation": "moved to", "object": "Leeds",
+                   "fact": "Dana Reed moved to Leeds in 2024.", "valid_from": "2024-01-01",
+                   "valid_until": None, "lines": ["L5", "L6"],
+                   "quote": "Dana moved to Leeds"}]})
+
 
 _EXTRACT = """You read part of a record of someone's day and write down lasting facts.
-Each line is "REF [source time] SPEAKER (role): text". The role "owner" is the user ("I", "me").
+Each line is "REF [source time] SPEAKER (role): text".
+The user is called "{owner}". Lines with the role "owner" are the user speaking ("I", "me").
+Write "{owner}" for the user in subject, object and fact. Never write "the owner", "the user"
+or "I".
 Reference time (for "yesterday", "next week" ...): {reference_time}
 
 Return JSON with:
 - entities: the people, places, organisations, things and topics the facts are about.
   name (the fullest name used), type (Person, Place, Organization, Thing, Topic, Event, ...),
-  aliases (other names used for it here).
+  aliases (other names used for it here). One entity for one real thing: a second name for it
+  is an alias, not a second entity. This is true for "{owner}" too.
 - facts: lasting facts about those entities. subject and object are entity names from your
-  list; the owner is "Owner". relation: a short lower-case verb phrase ("works at", "lives in",
-  "likes"). fact: one plain sentence. valid_from / valid_until: ISO dates if the text says when
+  list. relation: a short lower-case verb phrase. fact: one plain sentence.
+  valid_from / valid_until: ISO dates if the text says when
   it started or stopped being true, else null. lines: the REFs the fact comes from, exactly as
   written at the start of the line ("L7"), one REF per item, at least one. quote: the exact
   words from one of those lines, copied without change.
-Only what is clearly said. No small talk, no guesses, no facts from media or background talk.
+Rules for facts:
+- Only what is clearly said. No small talk, no guesses.
+- A speaker with the role "unknown" can be media (a TV, a radio, a video). Take a fact from
+  such a line only when it is clearly part of the talk with "{owner}". No facts from media.
+- One fact, one time. If a sentence lists several things, keep the whole list in ONE fact (pick
+  the main subject and the main object). Do not write a second fact that says only a part of
+  another fact, and do not repeat one sentence for each thing in the list.
+- Subject and object are the two entities the fact is really about. Do not add an entity
+  ("{owner}" or another one) to a fact that is not about it. The object is never the subject.
+- The relation says what the text says, and no more. Do not make the link stronger than the text.
+- No fact that only says a thing or a person was mentioned.
 If there is no lasting fact, return empty lists.
 
-Example of the answer shape (the content is made up):
+Example of the answer shape. It shows the shape only: do not copy its words or its relations.
 {example}
 
 Lines:
 {lines}"""
 
 
-def extract_request(lines: list[dict[str, str]], reference_time: str) -> LLMRequest:
+def extract_request(lines: list[dict[str, str]], reference_time: str, owner: str = "Owner") -> LLMRequest:
     text = "\n".join(ln["rendered"] for ln in lines)
-    prompt = _EXTRACT.format(reference_time=reference_time, lines=text, example=_EXTRACT_EXAMPLE)
+    prompt = _EXTRACT.format(reference_time=reference_time, lines=text, owner=owner,
+                             example=_extract_example(owner))
     return LLMRequest(stage="extract", prompt=prompt, schema_name="extraction",
                       schema=extract_schema([ln["ref"] for ln in lines]), payload=lines)
 

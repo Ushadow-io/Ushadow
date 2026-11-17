@@ -14,6 +14,7 @@ from memory_service.engine.staged.llm import LLM
 from memory_service.engine.staged.m1_review_uncertain import review_uncertain
 from memory_service.engine.staged.m2_merge_duplicate_facts import merge_duplicate_facts
 from memory_service.engine.staged.s1_extract import ExtractInput, extract, lines_from_episode
+from memory_service.engine.staged.s1b_tidy import tidy
 from memory_service.engine.staged.s2_candidates import find_candidates
 from memory_service.engine.staged.s3_match_entities import match_entities
 from memory_service.engine.staged.s4_reconcile_facts import reconcile_facts
@@ -43,6 +44,7 @@ class StagedEngine:
         ctx = self._ctx(group)
         lines = lines_from_episode(episode)
         ext = await extract(ctx, ExtractInput(lines, episode.reference_time))  # 1 model
+        tidy(ctx, ext)  # 1b code
         candidates = await find_candidates(ctx, ext)  # 2 database
         match = await match_entities(ctx, ext, candidates)  # 3 code, model if unclear
         decisions = await reconcile_facts(ctx, ext, match)  # 4 code, model if needed
