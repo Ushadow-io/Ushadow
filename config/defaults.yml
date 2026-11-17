@@ -6,25 +6,56 @@ defaults:
   llm: openai-llm
   embedding: openai-embed
   stt: stt-deepgram
+  # Optional batch provider retried when the primary STT request fails.
+  fallback_stt: ''
   stt_stream: stt-deepgram-stream
   tts: tts-http
-  vector_store: vs-qdrant
 
 models:
-  # ===========================
-  # LLM Models
-  # ===========================
-  - name: openai-llm
-    description: OpenAI GPT-4o-mini
+  - name: openai-realtime
+    description: Optional native audio engine for engaged browser conversations
     model_type: llm
     model_provider: openai
     api_family: openai
-    model_name: gpt-4o-mini
+    model_name: gpt-realtime-2.1
+    model_url: https://api.openai.com/v1
+    api_key: ${oc.env:OPENAI_API_KEY,''}
+    model_params: {}
+  # ===========================
+  # LLM Models
+  # ===========================
+  # Ushadow: the LLM chosen in ushadow (llm capability -> LLM_* env).
+  # Without ushadow it falls back to OpenAI GPT-4o-mini.
+  - name: openai-llm
+    description: LLM selected in ushadow (default OpenAI GPT-4o-mini)
+    model_type: llm
+    model_provider: openai
+    api_family: openai
+    # true for local thinking models (Qwen3, Gemma); Chronicle then switches
+    # thinking per task through chat_template_kwargs.
+    thinking: ${oc.env:LLM_THINKING,false}
+    model_name: ${oc.env:LLM_MODEL,gpt-4o-mini}
+    model_url: ${oc.env:LLM_BASE_URL,https://api.openai.com/v1}
+    api_key: ${oc.env:LLM_API_KEY,${oc.env:OPENAI_API_KEY,''}}
+    model_params:
+      temperature: 0.2
+      max_tokens: 2000
+    model_output: json
+
+  # Fallback LLM: retried once when the main LLM is unreachable (connection
+  # failure/timeout/5xx). Enabled by setting defaults.fallback_llm: fallback-llm
+  # (the wizard asks). gpt-5-nano = cheapest OpenAI reasoning-class model.
+  - name: fallback-llm
+    description: Fallback LLM used when the primary LLM is unreachable
+    model_type: llm
+    model_provider: openai
+    api_family: openai
+    model_name: gpt-5-nano
     model_url: https://api.openai.com/v1
     api_key: ${oc.env:OPENAI_API_KEY,''}
     model_params:
       temperature: 0.2
-      max_tokens: 2000
+      max_tokens: 4000
     model_output: json
 
   - name: local-llm
@@ -48,6 +79,82 @@ models:
     model_name: llama-3.1-70b-versatile
     model_url: https://api.groq.com/openai/v1
     api_key: ${oc.env:GROQ_API_KEY,''}
+    model_params:
+      temperature: 0.2
+      max_tokens: 2000
+    model_output: json
+
+  - name: llamacpp-llm
+    description: Local LLM via llama.cpp (GLM-4.7-Flash)
+    model_type: llm
+    model_provider: llamacpp
+    api_family: openai
+    thinking: true  # gemma/qwen-class thinking model — controls thinking via chat template
+    model_name: glm-4.7-flash
+    # Empty LLM_BASE_URL → resolve a tailnet-advertised chronicle-llm live (with /v1
+    # appended); else use container DNS on the shared chronicle-network. This avoids
+    # requiring a host-wide published inference port for a same-machine deployment.
+    model_url: ${oc.env:LLM_BASE_URL,''}
+    discovery_service: chronicle-llm
+    discovery_path: /v1
+    discovery_default: http://llama-cpp-llm:8080/v1
+    api_key: ${oc.env:LLAMA_API_KEY,no-key}
+    model_params:
+      temperature: 0.2
+      max_tokens: 2000
+    model_output: json
+
+  - name: qwen3.8-llm
+    description: Local multimodal agent LLM via llama.cpp (Qwen3.8 27B Dynamic Q4_K_XL)
+    model_type: llm
+    model_provider: llamacpp
+    api_family: openai
+    thinking: true
+    capabilities: [vision]
+    model_name: unsloth/Qwen3.8-27B-GGUF:Qwen3.8-27B-UD-Q4_K_XL.gguf
+    context_window: 98304
+    # Served by the same llama.cpp container as llamacpp-llm above, which hosts one
+    # model at a time. The 17.9GB target plus its ~0.9GB vision projector and Q8 KV
+    # cache are the validated 24GB-GPU profile.
+    model_url: ${oc.env:LLM_BASE_URL,''}
+    discovery_service: chronicle-llm
+    discovery_path: /v1
+    discovery_default: http://llama-cpp-llm:8080/v1
+    api_key: ${oc.env:LLAMA_API_KEY,no-key}
+    model_params:
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 1.5
+      repeat_penalty: 1.0
+      max_tokens: 2000
+    model_output: json
+
+  - name: openrouter-qwen3.8-27b
+    description: Qwen3.8 27B multimodal model via OpenRouter
+    model_type: llm
+    model_provider: openrouter
+    api_family: openai
+    thinking: false
+    capabilities: [vision]
+    model_name: qwen/qwen3.8-27b
+    model_url: https://openrouter.ai/api/v1
+    api_key: ${oc.env:OPENROUTER_API_KEY,''}
+    context_window: 1000000
+    model_params:
+      temperature: 0.0
+      max_tokens: 8192
+    model_output: json
+
+  - name: gemma4-llm
+    description: Gemma 4 E2B-it (unified model, reuses ASR service)
+    model_type: llm
+    model_provider: gemma4
+    api_family: openai
+    model_name: gemma-4-E2B-it
+    model_url: http://${oc.env:GEMMA4_ASR_URL,host.docker.internal:8767}/v1
+    api_key: no-key
     model_params:
       temperature: 0.2
       max_tokens: 2000
@@ -78,6 +185,17 @@ models:
     embedding_dimensions: 768
     model_output: vector
 
+  - name: llamacpp-embed
+    description: Local embeddings via llama.cpp (nomic-embed-text-v1.5)
+    model_type: embedding
+    model_provider: llamacpp
+    api_family: openai
+    model_name: nomic-embed-text-v1.5
+    model_url: http://llama-cpp-embed:8080/v1
+    api_key: ${oc.env:LLAMA_API_KEY,no-key}
+    embedding_dimensions: 768
+    model_output: vector
+
   # ===========================
   # Speech-to-Text Models
   # ===========================
@@ -88,6 +206,10 @@ models:
     api_family: http
     model_url: https://api.deepgram.com/v1
     api_key: ${oc.env:DEEPGRAM_API_KEY,''}
+    # keyword_boosting: hot words sent as the `keyterm` query param (acoustic bias,
+    # never echoed into output).
+    capabilities:
+      - keyword_boosting
     operations:
       stt_transcribe:
         method: POST
@@ -116,8 +238,152 @@ models:
     model_type: stt
     model_provider: parakeet
     api_family: http
-    model_url: http://${oc.env:PARAKEET_ASR_URL,172.17.0.1:8767}
+    # Empty PARAKEET_ASR_URL → resolve a tailnet-advertised chronicle-asr live
+    # (config-from-tailnet-later); else fall back to the host-local default. An
+    # explicit URL (own/remote endpoint) always wins. Scheme is added if missing.
+    model_url: ${oc.env:PARAKEET_ASR_URL,''}
+    discovery_service: chronicle-asr
+    discovery_default: http://172.17.0.1:8767
     api_key: ''
+    # keyword_boosting: hot words sent as the `context_info` form field (acoustic
+    # recognition hint, never echoed into output).
+    capabilities:
+      - keyword_boosting
+    operations:
+      stt_transcribe:
+        method: POST
+        path: /transcribe
+        content_type: multipart/form-data
+        response:
+          type: json
+          extract:
+            text: text
+            words: words
+            segments: segments
+
+  - name: stt-nemotron-batch
+    description: Nemotron 3.5 ASR (batch lane of the same NeMo service that streams)
+    model_type: stt
+    model_provider: nemo
+    api_family: http
+    # Nemotron serves batch + streaming from one container on 8772 (not 8767).
+    model_url: http://${oc.env:NEMOTRON_ASR_STREAM_URL,host.docker.internal:8772}
+    api_key: ''
+    capabilities:
+      - word_timestamps
+      - segments
+      - keyword_boosting
+    operations:
+      stt_transcribe:
+        method: POST
+        path: /transcribe
+        content_type: multipart/form-data
+        timeout: 600
+        response:
+          type: json
+          extract:
+            text: text
+            words: words
+            segments: segments
+
+  - name: stt-gemma4
+    description: Google Gemma 4 E2B-it (batch, LLM-backbone, MTP)
+    model_type: stt
+    model_provider: gemma4
+    api_family: http
+    model_url: ${oc.env:GEMMA4_ASR_URL,''}
+    discovery_service: chronicle-asr
+    discovery_default: http://host.docker.internal:8767
+    api_key: ''
+    # context_prompt: Gemma 4 is an LLM and consumes context as prompt text, so it
+    # is given the user-authored asr_context only — NOT the plugin wake-word boost
+    # list, which it would echo into the transcript. (No diarization: E2B collapses
+    # multi-speaker audio to one speaker; see gemma4/service.py get_capabilities.)
+    capabilities:
+      - context_prompt
+    asr_context: ''
+    operations:
+      stt_transcribe:
+        method: POST
+        path: /transcribe
+        content_type: multipart/form-data
+        response:
+          type: json
+          extract:
+            text: text
+            words: words
+            segments: segments
+
+  - name: stt-granite
+    description: IBM Granite Speech 4.1 (batch, LLM-backbone; en/fr/de/es/pt)
+    model_type: stt
+    model_provider: granite
+    api_family: http
+    model_url: ${oc.env:GRANITE_ASR_URL,''}
+    discovery_service: chronicle-asr
+    discovery_default: http://host.docker.internal:8767
+    api_key: ''
+    # context_prompt: Granite is an LLM-backbone ASR and consumes context as prompt
+    # text, so it is given the user-authored asr_context only — NOT the plugin
+    # wake-word boost list, which it would echo into the transcript.
+    # diarization + segments: Granite emits speaker-attributed segments with real
+    # model timestamps (two-pass: timestamps + speaker attribution), so the backend
+    # uses these for speaker turns and skips pyannote (GRANITE_DIARIZE=0 to disable).
+    capabilities:
+      - context_prompt
+      - diarization
+      - segments
+    asr_context: ''
+    operations:
+      stt_transcribe:
+        method: POST
+        path: /transcribe
+        content_type: multipart/form-data
+        response:
+          type: json
+          extract:
+            text: text
+            words: words
+            segments: segments
+
+  - name: stt-af-next
+    description: NVIDIA Audio Flamingo Next (batch, prompt-based diarization with timestamps; noncommercial license)
+    model_type: stt
+    model_provider: af_next
+    api_family: http
+    model_url: ${oc.env:AF_NEXT_ASR_URL,''}
+    discovery_service: chronicle-asr
+    discovery_default: http://host.docker.internal:8767
+    api_key: ''
+    capabilities:
+      - segments
+      - diarization
+      - keyword_boosting
+    operations:
+      stt_transcribe:
+        method: POST
+        path: /transcribe
+        content_type: multipart/form-data
+        timeout: 3600
+        response:
+          type: json
+          extract:
+            text: text
+            segments: segments
+
+  - name: stt-qwen3-asr
+    description: Qwen3-ASR via vLLM (batch, 52 languages)
+    model_type: stt
+    model_provider: qwen3-asr
+    api_family: http
+    model_url: ${oc.env:QWEN3_ASR_URL,''}
+    discovery_service: chronicle-asr
+    discovery_default: http://host.docker.internal:8767
+    api_key: ''
+    capabilities:
+      - multilingual
+      - language_detection
+      - keyword_boosting
     operations:
       stt_transcribe:
         method: POST
@@ -148,6 +414,36 @@ models:
         response:
           type: json
 
+  - name: stt-smallest
+    description: Smallest.ai Pulse STT (batch)
+    model_type: stt
+    model_provider: smallest
+    api_family: http
+    model_url: https://api.smallest.ai/waves/v1/pulse
+    api_key: ${oc.env:SMALLEST_API_KEY,''}
+    capabilities:
+      - word_timestamps
+      - diarization
+    operations:
+      stt_transcribe:
+        method: POST
+        path: /get_text
+        headers:
+          Authorization: Bearer ${oc.env:SMALLEST_API_KEY,''}
+        query:
+          model: pulse
+          # hi natively covers Hindi-English code-switching; en hallucinates massive
+          # insertions on Hindi speech (158% corpus WER vs 12.9% with hi on CoSHE-100)
+          language: hi
+          word_timestamps: 'true'
+          diarize: 'true'
+        response:
+          type: json
+          extract:
+            text: transcription
+            words: words
+            segments: utterances
+
   # ===========================
   # Streaming STT Models
   # ===========================
@@ -158,12 +454,16 @@ models:
     api_family: websocket
     model_url: wss://api.deepgram.com/v1/listen
     api_key: ${oc.env:DEEPGRAM_API_KEY,''}
+    capabilities:
+      - diarization
+      - keyword_boosting
     operations:
       query:
         model: nova-3
         language: multi
         smart_format: 'true'
         punctuate: 'true'
+        diarize: 'true'
         encoding: linear16
         sample_rate: 16000
         channels: '1'
@@ -211,50 +511,206 @@ models:
           words: words
           segments: segments
 
-  # ===========================
-  # Vector Store
-  # ===========================
-  - name: vs-qdrant
-    description: Qdrant vector database
-    model_type: vector_store
-    model_provider: qdrant
-    api_family: qdrant
-    model_url: http://${oc.env:QDRANT_BASE_URL,qdrant}:${oc.env:QDRANT_PORT,6333}
-    model_params:
-      host: ${oc.env:QDRANT_BASE_URL,qdrant}
-      port: ${oc.env:QDRANT_PORT,6333}
-      collection_name: omi_memories
+  - name: stt-qwen3-asr-stream
+    description: Qwen3-ASR streaming transcription via vLLM bridge
+    model_type: stt_stream
+    model_provider: qwen3-asr
+    api_family: websocket
+    model_url: ws://${oc.env:QWEN3_ASR_STREAM_URL,host.docker.internal:8769}
+    api_key: ''
+    operations:
+      query: {}
+      end:
+        message:
+          type: CloseStream
+      expect:
+        interim_type: interim
+        final_type: final
+        extract:
+          text: text
+          words: words
+          segments: segments
+
+  - name: stt-nemotron-stream
+    description: Nemotron 3.5 cache-aware streaming ASR (NeMo, ~100ms latency)
+    model_type: stt_stream
+    model_provider: nemotron
+    api_family: websocket
+    model_url: ws://${oc.env:NEMOTRON_ASR_STREAM_URL,host.docker.internal:8772}/stream
+    api_key: ''
+    capabilities:
+      - multilingual
+    operations:
+      query: {}
+      end:
+        message:
+          type: CloseStream
+      expect:
+        interim_type: interim
+        final_type: final
+        extract:
+          text: text
+          words: words
+          segments: segments
+
+  - name: stt-vibevoice-streaming-1.5b
+    description: Microsoft VibeVoice ASR Streaming 1.5B with speaker attribution
+    model_type: stt_stream
+    model_provider: vibevoice-streaming
+    api_family: websocket
+    model_url: ws://${oc.env:VIBEVOICE_STREAMING_ASR_URL,host.docker.internal:8773}/stream
+    api_key: ''
+    capabilities:
+      - diarization
+      - context_prompt
+      - multilingual
+    operations:
+      query: {}
+      start:
+        message:
+          type: start
+          sample_rate: 16000
+        # Generic registry adapter writes only explicit ASR context into this field.
+        context_field: context_info
+      end:
+        message:
+          type: CloseStream
+      expect:
+        interim_type: interim
+        final_type: final
+        extract:
+          text: text
+          words: words
+          segments: segments
+
+  - name: stt-gemma4-stream
+    description: Google Gemma 4 E2B-it (streaming-ish, bounded rolling window + MTP)
+    model_type: stt_stream
+    model_provider: gemma4
+    api_family: websocket
+    # Same gemma4-asr service as the batch entry; the /stream path is the WS endpoint.
+    model_url: ws://${oc.env:GEMMA4_ASR_URL,host.docker.internal:8767}/stream
+    api_key: ''
+    # No diarization (E2B collapses speakers). The /stream endpoint does not accept
+    # context, so no keyword_boosting/context_prompt — it gets no ASR hints.
+    capabilities: []
+    operations:
+      query: {}
+      end:
+        message:
+          type: CloseStream
+      expect:
+        interim_type: interim
+        final_type: final
+        extract:
+          text: text
+          words: words
+          segments: segments
+
+  - name: stt-smallest-stream
+    description: Smallest.ai Pulse streaming transcription over WebSocket
+    model_type: stt_stream
+    model_provider: smallest
+    api_family: websocket
+    model_url: wss://api.smallest.ai/waves/v1/stt/live
+    api_key: ${oc.env:SMALLEST_API_KEY,''}
+    capabilities:
+      - word_timestamps
+      - diarization
+    operations:
+      auth_prefix: Bearer
+      query:
+        model: pulse
+        # hi natively covers Hindi-English code-switching (see stt-smallest note)
+        language: hi
+        encoding: linear16
+        sample_rate: 16000
+        word_timestamps: 'true'
+        diarize: 'true'
+        sentence_timestamps: 'true'
+      end:
+        message:
+          type: close_stream
+      expect:
+        interim_type: ''
+        final_type: ''
+        extract:
+          text: transcript
+          words: words
+          segments: utterances
 
 # ===========================
 # Memory Configuration
 # ===========================
 memory:
-  provider: openmemory_mcp
+  # Chronicle's agentic Markdown vault is the only memory provider.
+  provider: chronicle
   timeout_seconds: 1200
+  # Writing and retrieval are independent so a deployment can, for example, use Pi
+  # with a local model for ingestion and the lightweight direct loop for searches.
+  # Recovery is explicit. The default retries once through `direct`; `pi`, `codex`,
+  # or null can be selected instead. When direct is both primary and recovery, that
+  # recovery attempt uses defaults.fallback_llm.
+  agents:
+    write:
+      backend: direct
+      recovery_backend: direct
+    search:
+      backend: direct
+  # Backend definitions are shared by the write/search selectors above. `direct`
+  # uses the model resolved by the corresponding llm_operations entry.
+  backends:
+    direct: {}
+    codex:
+      model: "gpt-5.6-luna"         # Codex model used for routine vault writes
+      reasoning_effort: low         # keep routine ingestion economical; raise for quality evals
+      service_tier: ""              # set to priority for Codex Fast mode (higher usage)
+      # codex --sandbox. workspace-write (writes confined to the vault dir) needs
+      # bubblewrap, which cannot run nested inside the rootless-podman containers —
+      # there the container is the isolation boundary and the wizard sets
+      # danger-full-access instead.
+      sandbox_mode: workspace-write
+      timeout_seconds: 900          # per-run wall clock before the run is failed
+      # Share of the ChatGPT weekly Codex budget Chronicle may consume before it
+      # yields. At/over this, background recording recovers through the direct
+      # backend so the remainder stays available for interactive Codex use.
+      # Read live from `account/rateLimits/read`; null disables the check. An
+      # unreadable quota fails open (the run proceeds).
+      max_used_percent: 80
+      # Which metered bucket to check. Models meter against different buckets — e.g.
+      # `codex` vs `codex_bengalfox` (GPT-5.3-Codex-Spark) — so set this when `model`
+      # above draws on a non-default bucket. Empty uses the account's default view.
+      limit_id: ""
+    pi:
+      # Model selection comes from llm_operations and defaults. The adapter resolves
+      # that route into a provider, upstream model id, URL, and isolated models.json.
+      timeout_seconds: 900
+      # Ushadow: the selected LLM sets this (LLM_CONTEXT_WINDOW). It must match the
+      # context the server loaded, or Pi overflows it instead of compacting.
+      context_window: ${oc.env:LLM_CONTEXT_WINDOW,98304}
+      # Keep most of the window for Pi's system prompt, tool schemas, transcript,
+      # and multi-round tool results. The local Qwen setup serves the 98K profile.
+      max_tokens: 4096
+      # For local Qwen, every non-off level keeps enable_thinking=true; effort labels
+      # are not enforced by llama.cpp. Tool-directed memory writes need thinking off.
+      thinking: off
+  # Private agent-owned state learned from Pi's inference traces. This is stored
+  # outside the semantic vault: active AGENTS.md guidance is injected once per run;
+  # generated skill/scripts remain inert candidates; AGENTS.md candidates require
+  # explicit evaluation evidence, review, and promotion before production loads them.
+  operating_memory:
+    # Shadow mode records candidates for isolated replay and never changes active
+    # guidance. Switch to active only after explicit candidate review/promotion.
+    mode: shadow
+    operation_threshold: 25
+    max_traces_per_user: 20
+    artifact_scan_limit: 2000
   extraction:
     enabled: true
     prompt: |
       Extract important information from this conversation and return a JSON object with an array named "facts".
       Include personal preferences, plans, names, dates, locations, numbers, and key details.
       Keep items concise and useful.
-
-  # OpenMemory MCP provider settings (used when provider: openmemory_mcp)
-  openmemory_mcp:
-    server_url:  ${oc.env:MEMORY_SERVER_URL,'http://localhost:8765'}
-    client_name: chronicle
-    user_id: default
-    timeout: 30
-
-  # Mycelia provider settings (used when provider: mycelia)
-  mycelia:
-    api_url: http://localhost:5173
-    timeout: 30
-
-  # Obsidian Neo4j provider settings (legacy)
-  obsidian:
-    enabled: false
-    neo4j_host: neo4j-mem0
-    timeout: 30
 
 # ===========================
 # Speaker Recognition
@@ -271,12 +727,14 @@ speaker_recognition:
   hf_token: ${oc.env:HF_TOKEN,''}
 
   # Speaker identification threshold
-  similarity_threshold: 0.15
+  similarity_threshold: 0.5
 
   # Diarization chunking configuration (speaker service self-managed chunking)
   # Maximum audio duration (seconds) for single PyAnnote call
   # Files longer than this will be chunked automatically by the speaker service
-  max_diarize_duration: 60
+  max_diarize_duration: 600
+  # Maximum neural segmentation windows processed concurrently
+  diarize_concurrent_chunks: 2
   # Overlap (seconds) between chunks for speaker continuity
   diarize_chunk_overlap: 5.0
   # Backend API URL for fetching audio segments (used by speaker service)
@@ -286,12 +744,155 @@ speaker_recognition:
   deepgram_api_key: ${oc.env:DEEPGRAM_API_KEY,''}
 
 # ===========================
+# ASR Services Configuration
+# ===========================
+asr_services:
+  vibevoice:
+    batch_threshold_seconds: 300    # Audio longer than this triggers batching
+    batch_duration_seconds: 240     # Non-overlapping window size
+    batch_overlap_seconds: 30       # Overlap between windows
+    # Silence gate — VibeVoice echoes the context_info prompt back as a phantom
+    # transcript on near-silent windows. Windows with < silence_min_voiced_ms of
+    # voiced audio (frame RMS > silence_energy_floor on a [-1,1] signal) skip the
+    # model and emit nothing. Validated: echo windows have 0-60ms voiced, real
+    # speech 510ms+. Set silence_gate_enabled: false to disable.
+    silence_gate_enabled: true
+    silence_energy_floor: 0.01      # Per-frame RMS floor for a "voiced" frame
+    silence_min_voiced_ms: 200      # Min voiced audio for a window to be transcribed
+
+# ===========================
 # Chat Configuration
 # ===========================
 chat:
   system_prompt: |
     You are a helpful AI assistant with access to the user's conversation history and memories.
     Provide clear, concise, and accurate responses based on the context available to you.
+
+# ===========================
+# LLM Operation Configuration
+# ===========================
+# Per-operation LLM parameters. Each key is an operation name.
+# 'model' references a named entry in the models list above.
+# If 'model' is omitted, the operation uses defaults.llm.
+# Parameters (temperature, max_tokens, response_format) override
+# the model's model_params for that operation only.
+llm_operations:
+  voice_realtime:
+    model: openai-realtime
+  voice_conversation:
+    temperature: 0.3
+    reasoning_effort: none
+    max_tokens: 256
+  memory_extraction:
+    temperature: 0.1
+    max_tokens: 2000
+    response_format: json
+  memory_update:
+    temperature: 0.1
+    max_tokens: 2000
+  memory_reprocess:
+    temperature: 0.1
+    max_tokens: 2000
+    response_format: json
+  # Vault write agent. Reasoning models spend completion tokens before emitting a
+  # tool call or note body, so this budget must cover both. Keep thinking disabled
+  # by default: the validated Qwen profile ran with thinking disabled, while `none`
+  # normalizes safely to the lowest supported effort for OpenAI reasoning models.
+  # Ushadow: no model pin, so this uses the LLM selected in ushadow.
+  memory_write:
+    # Vault writes are durable state transitions, not creative generation. Exact-input
+    # replays showed temperature 1.0 split one concept into duplicate Topics in 2/3
+    # runs. Keep sampling at 0.1 for minimal path diversity; deterministic gates remain
+    # authoritative.
+    temperature: 0.1
+    reasoning_effort: high
+    max_tokens: 16000
+  # Vault retrieval agent. This is separate so reads can use a cheaper/faster model
+  # or a different agent backend without changing ingestion.
+  memory_search:
+    reasoning_effort: high
+    max_tokens: 8000
+  memory_harness_optimization:
+    temperature: 0.0
+    reasoning_effort: high
+    max_tokens: 4096
+  conversation_title:
+    temperature: 0.3
+    reasoning_effort: none
+    # Qwen3.8 can emit hidden reasoning before its tiny visible answer. Keep the
+    # token ceiling large enough to reach content; the RQ job's 30s timeout is the
+    # actual latency bound.
+    max_tokens: 2048
+  short_summary:
+    temperature: 0.3
+    reasoning_effort: none
+    max_tokens: 2048
+  timeline_merge:
+    temperature: 0.0
+    reasoning_effort: low
+    max_tokens: 4096
+    response_format: json
+  # Session accounts include source quotations and can be larger than grouping
+  # decisions. Output capacity is separate from Pi's working-context compaction.
+  timeline_session_account:
+    # Multi-turn investigations use sampling; greedy decoding can repeat failed tools.
+    temperature: 1.0
+    reasoning_effort: none
+    max_tokens: 16384
+  # Whole-day visual second pass. It proposes semantic merges for human review and
+  # never mutates episode rows itself.
+  # Ushadow: no model pin, so this uses the LLM selected in ushadow.
+  timeline_consolidation:
+    temperature: 0.0
+    reasoning_effort: none
+    max_tokens: 8192
+  # Semantic Timeline analysis through the Pi executor. The executor is an adapter;
+  # the named operation remains the authoritative model-selection seam.
+  timeline_segmentation:
+    temperature: 0.0
+    reasoning_effort: none
+    max_tokens: 32000
+    response_format: json
+  timeline_thumbnail:
+    temperature: 0.0
+    reasoning_effort: none
+    max_tokens: 2000
+    response_format: json
+  immich_visual_evidence:
+    temperature: 0.0
+    reasoning_effort: none
+    max_tokens: 8000
+    response_format: json
+  manual_memory_image:
+    temperature: 0.0
+    reasoning_effort: none
+    max_tokens: 4000
+    response_format: json
+  detailed_summary:
+    temperature: 0.3
+    reasoning_effort: none
+    # Reasoning models spend completion tokens on reasoning before any output;
+    # this extraction task needs visible prose, not hidden thinking.
+    max_tokens: 8000
+  entity_extraction:
+    temperature: 0.1
+    max_tokens: 2000
+    response_format: json
+  chat:
+    temperature: 0.7
+  prompt_optimization:
+    temperature: 0.3
+    max_tokens: 4000
+  plugin_assistant:
+    temperature: 0.0
+    reasoning_effort: none
+    max_tokens: 200
+  # Privacy screen for annotation exports: flag segments too personal to
+  # share with an outside annotator. JSON output (list of flagged indices).
+  sensitivity_screening:
+    temperature: 0.0
+    max_tokens: 2000
+    response_format: json
 
 # ===========================
 # Backend Configuration
@@ -311,31 +912,52 @@ backend:
     model: gpt-4o-mini
     timeout: 60
 
-  # Audio processing settings
-  audio:
-    # When enabled, always persist audio even if no speech is detected
-    # This creates conversations for all audio sessions regardless of speech content
-    always_persist_enabled: false
-
   # Transcription provider configuration
   transcription:
     provider: deepgram  # or parakeet
     api_key: ${oc.env:DEEPGRAM_API_KEY,''}
     base_url: https://api.deepgram.com
-    # Fallback to provider segments when speaker service unavailable
-    # When true: Use segments from transcription provider (e.g., mock provider in tests)
-    # When false: Expect speaker service to create segments via diarization (default production behavior)
-    use_provider_segments: false
+    # Maximum audio duration sent in one synchronous batch request. Providers may
+    # set a lower ceiling without changing their model definition/cache fingerprint.
+    batch_chunk_seconds: 3600
+    batch_chunk_seconds_by_provider:
+      # Pulse sessions are capped at ten minutes; leave one minute of headroom.
+      smallest: 540
+    # Transcription job timeout in seconds (how long to wait for batch transcription)
+    job_timeout_seconds: 900
+    # When enabled, automatically re-transcribe every streaming conversation with the batch provider
+    # Streaming transcript is shown as a preview; memories/summaries only generated from batch result
+    always_batch_retranscribe: false
 
   # Diarization settings
+  # diarization_source: "provider" trusts diarized segments from the transcription
+  # provider when available (falls back to pyannote otherwise);
+  # "pyannote" always re-diarizes via the speaker service
   diarization:
     diarization_source: pyannote
-    similarity_threshold: 0.15
-    min_duration: 0.5
+    similarity_threshold: 0.5
+    # Preserve short interjections and their transcript words. Cluster identity uses
+    # pooled long excerpts; display fragmentation is reduced after projection.
+    min_duration: 0.0
     collar: 2.0
-    min_duration_off: 1.5
-    min_speakers: 2
-    max_speakers: 6
+    # Keep Pyannote's neural timeline strictly exclusive. Same-speaker gaps are
+    # consolidated later with `collar`, where another speaker/event blocks merging.
+    min_duration_off: 0.0
+    # Leave speaker count unconstrained by default.  These are optional expert
+    # overrides, not priors: forcing even a generous range can change pyannote's
+    # segmentation and silently merge or invent speakers.
+    min_speakers: null
+    max_speakers: null
+    # Cross-chunk speaker reconciliation (links per-chunk centroids into global
+    # speakers when long audio is chunked). Minimum cosine similarity to merge two
+    # chunk-local speaker centroids — lower merges more aggressively. An explicitly
+    # configured max_speakers also caps the resulting global speaker count.
+    reconciliation_threshold: 0.4
+    # Open-set identification: a diarized speaker is only named if the best gallery
+    # match beats the runner-up by at least this cosine margin (else "unknown").
+    identify_margin: 0.1
+    # Prevent one enrolled speaker from being assigned to two diarized speakers.
+    exclusive: true
 
   # Cleanup settings for soft-deleted conversations
   cleanup:
@@ -348,12 +970,364 @@ backend:
     min_confidence: ${oc.decode:${oc.env:SPEECH_DETECTION_MIN_CONFIDENCE,0.7}}        # Word confidence threshold
     min_duration: ${oc.decode:${oc.env:SPEECH_DETECTION_MIN_DURATION,10.0}}         # Minimum speech duration in seconds
 
+  # Audio filtering — local VAD gate ahead of (paid) transcription. When
+  # require_speech is on, audio in which the local VAD finds no speech is never
+  # transcribed: ScreenPipe sessions are rejected at ingest, batch jobs skip the
+  # provider call (including clips too short for silence condensing), and
+  # windowed-batch live preview windows are skipped. Streaming ASR
+  # (defaults.stt_stream) is not gated.
+  audio_filtering:
+    require_speech: true
+
+    # Silence trim — after a conversation is transcribed, stretches with no speech
+    # are moved onto a soft-deleted remnant and the survivors are packed onto a
+    # contiguous timeline (the transcript is re-timed with them). The audio is kept,
+    # and each chunk's immutable captured_at records when it really happened.
+    silence_trim:
+      enabled: true
+      # Context kept on each side of speech.
+      pad_seconds: 5.0
+      # Shortest silent run worth cutting. Far longer than any conversational pause
+      # on purpose: this finds stretches where nothing was happening, and lowering
+      # it towards a few seconds makes playback skip.
+      min_run_seconds: 120.0
+      # Leave a conversation alone below this total saving.
+      min_saving_seconds: 60.0
+
+  # Screen context pulled from a capture node for one completed conversation.
+  # This is raw per-frame OCR, not the collector's already-reduced observation
+  # stream, so it is filtered on arrival and expired by the
+  # screen_context_retention cron once its conversation is unreachable.
+  screen_context:
+    # Bound on OCR text kept per conversation. A byte budget rather than a frame
+    # count: sparse fullscreen frames are ~45% of frames but ~4% of bytes, and a
+    # frame count would evict those first — they are often the only record that a
+    # fullscreen session happened at all.
+    max_bytes_per_conversation: 4000000
+    # Token overlap at/above this collapses one frame into the previous kept one.
+    # Applied ONLY to text-dense frames in a known window; sparse/contextless
+    # frames are exempt because overlap is not evidence there.
+    similarity_threshold: 0.88
+    retention_days: 30               # grace after hard delete / soft-delete expiry
+
   # Conversation stop conditions
   conversation_stop:
-    transcription_buffer_seconds: 120    # Periodic transcription interval (2 minutes)
     speech_inactivity_threshold: 60      # Speech gap threshold for closure (1 minute)
 
   # Audio storage paths
   audio_storage:
     audio_base_path: /app/data
     audio_chunks_path: /app/data/audio_chunks
+
+# ===========================
+# Cron Jobs Configuration
+# ===========================
+# ===========================
+# Observability Configuration
+# ===========================
+observability:
+  langfuse:
+    # Browser-accessible URL for linking to Langfuse sessions.
+    # Distinct from LANGFUSE_HOST which may be an internal Docker URL.
+    # Example with Chronicle HTTPS: https://my-node.example.ts.net:3443
+    # Direct non-HTTPS fallback: http://localhost:3002
+    public_url: ''
+
+# Host-level health watchdog, run by the node agent (edge/service_manager.py).
+#
+# These faults are invisible to every container health check: the containers stay
+# up and Mongo/Redis stay green while the deployment is unusable from outside. The
+# agent runs natively on the host, so it is the only component that can see them.
+#
+# auto_repair applies the safe, idempotent remedy for a failing check (restarting a
+# container holding a deleted socket, forcing an aardvark-dns reload, re-asserting
+# the Tailscale operator). Faults needing a human — an expired node key — are only
+# ever reported. Set false to report without acting.
+watchdog:
+  enabled: true
+  interval_secs: 300
+  auto_repair: true
+  # Consecutive failures before a repair is attempted, so one flaky probe cannot
+  # trigger a restart. Repairs are also rate-limited by min_repair_interval_secs.
+  failures_before_repair: 2
+  min_repair_interval_secs: 1800
+  checks:
+    container_dns: true
+    tailscale_login: true
+    tailscale_key_expiry: true
+    tailscale_operator: true
+    socket_mount_fresh: true
+    tls_cert: true
+
+vision:
+  # Optional external adapter. Registry-backed `model` routes select their model in
+  # llm_operations; a route set to `codex` uses this one visible shared definition.
+  backends:
+    codex:
+      model: "gpt-5.6-luna"
+      reasoning_effort: low
+      timeout_seconds: 600
+
+manual_memories:
+  agents:
+    analyze_image:
+      backend: model         # model (llm_operations) | codex
+      operation: manual_memory_image
+      timeout_seconds: 300
+
+cron_jobs:
+  pi_operating_memory_threshold:
+    description: "Optimize Pi operating memory after enough new inference traces"
+    enabled: true
+    schedule: "15 * * * *"
+  pi_operating_memory_daily:
+    description: "Daily backstop for Pi operating-memory optimization"
+    enabled: true
+    schedule: "30 4 * * *"
+  speaker_finetuning:
+    description: "Process speaker diarization annotations and send to speaker recognition service for training"
+    enabled: false
+    schedule: "0 2 * * *"
+  asr_jargon_extraction:
+    description: "Extract jargon from recent memories and cache for ASR context boosting"
+    enabled: false
+    schedule: "*/30 * * * *"
+  asr_finetuning:
+    description: "Export annotated conversations to VibeVoice for ASR LoRA fine-tuning"
+    enabled: false
+    schedule: "0 3 * * 0"
+  prompt_optimization:
+    description: "Analyze user annotations and optimize LLM prompts"
+    enabled: false
+    schedule: "0 4 * * 0"
+  annotation_suggestions:
+    description: "Use LLM to surface potential transcript errors for user review"
+    enabled: false
+    schedule: "0 5 * * *"
+  auto_clean:
+    description: "Auto-archive speech-free conversations (deletes audio, keeps metadata)"
+    enabled: false
+    schedule: "0 3 * * *"
+  immich_memories:
+    description: "Discover a bounded set of salient Immich photo candidates"
+    enabled: false
+    schedule: "30 4 * * *"
+  person_photos:
+    description: "Embed Immich face photos into the vault's People notes"
+    enabled: false
+    schedule: "45 4 * * *"
+  device_audio_ingest:
+    description: "Assemble uploaded device audio into speech-driven conversations"
+    enabled: true
+    schedule: "*/2 * * * *"
+  chat_note_review:
+    description: "Recover reviewed chat note generation and approved applications"
+    enabled: true
+    schedule: "* * * * *"
+  episode_memory_review:
+    description: "Generate potential memory from reviewed timeline episodes"
+    enabled: true
+    # Recover explicit selection requests; source date never orders memory work.
+    schedule: "* * * * *"
+  episode_thumbnails:
+    description: "Give timeline episodes a representative frame from their own interval"
+    enabled: true
+    schedule: "*/10 * * * *"
+  manual_memory_image_enrichment:
+    description: "Describe and extract text from saved images not completed on arrival"
+    enabled: true
+    schedule: "*/5 * * * *"
+  manual_memory_visual_index:
+    description: "Index manual-memory images for visual search when the GPU node is up"
+    enabled: true
+    schedule: "*/10 * * * *"
+  screen_context_retention:
+    description: "Expire conversation screen context whose conversation is gone"
+    enabled: true
+    schedule: "0 4 * * *"
+  audio_stream_reclaim:
+    description: "Delete raw-audio write-ahead logs whose recording is over and fully persisted"
+    enabled: true
+    # Deletion is otherwise attempted once per recording, so a restart or crash at
+    # the wrong moment strands the log forever — this deployment accumulated 764 MB
+    # that way. The safety rule is unchanged and fail-closed: a log is deleted only
+    # when every consumer group proves zero pending and zero lag.
+    schedule: "*/15 * * * *"
+  rolling_reconciliation_scan:
+    description: "Recover only dirty evidence ranges authorized by an explicit reconciliation request"
+    enabled: true
+    # Scheduling only — the scan does Mongo queries and RQ enqueues, so it is safe on
+    # the API event loop. Five minutes matches the debounce: a range that stops
+    # changing is looked at shortly after, and forced progress is never delayed by
+    # more than one tick.
+    schedule: "*/5 * * * *"
+  timeline_publication_recovery:
+    description: "Roll forward crash-interrupted Timeline publication journals"
+    enabled: true
+    schedule: "*/5 * * * *"
+  speaker_enrollment_recovery:
+    description: "Recover interrupted speaker enrollment operations"
+    enabled: true
+    schedule: "* * * * *"
+  timeline_episode_dispatch_recovery:
+    description: "Recover stable Timeline episode summary and completion dispatch"
+    enabled: true
+    schedule: "*/5 * * * *"
+  notification_dispatch:
+    description: "Enqueue due durable push-notification intents"
+    enabled: true
+    schedule: "* * * * *"
+  notification_receipts:
+    description: "Resolve Expo tickets into provider-acceptance receipts"
+    enabled: true
+    schedule: "*/5 * * * *"
+  timeline_consolidation_prefetch:
+    description: "Keep grouping suggestions ready ahead of the Timeline review cursor"
+    enabled: false
+    schedule: "*/5 * * * *"
+  session_memory_prepare:
+    description: "Prepare recent meaningful sessions and recover their memory jobs"
+    enabled: true
+    schedule: "*/5 * * * *"
+  source_search_index:
+    description: "Resume bounded recording and session search indexing"
+    enabled: true
+    schedule: "* * * * *"
+  vault_context_assessment:
+    description: "Assess whether accepted context helps earlier sessions; never auto-regenerate"
+    enabled: true
+    schedule: "*/5 * * * *"
+
+timeline:
+  consolidation:
+    # Pre-generate visual grouping proposals after episode publication. The selected
+    # model remains configurable under Settings > AI Model Settings.
+    pregenerate: true
+    # Keep this many oldest reviewable days supplied with grouping suggestions.
+    prefetch_days: 5
+    timeout_seconds: 300
+  # Window size is a capacity knob, not a semantic one — the prompt treats windows as
+  # coverage units that must never become episode boundaries. It sets how many files
+  # one agent pass must read: 20min/3overlap put a full day at 85 windows, which never
+  # once produced episodes, while days under ~18 windows nearly always succeeded.
+  # 60min puts a full day at 26. The per-window text cap is raised to match so fewer,
+  # larger windows do not truncate more evidence than the old layout carried.
+  window_minutes: 60
+  overlap_minutes: 3
+  max_text_chars_per_window: 60000
+  max_anchor_images_per_window: 4
+  executor: pi
+  codex:
+    model: gpt-5.6-luna
+    service_tier: ""              # set to priority for Codex Fast mode (higher usage)
+    # `low` was chosen for cost, but a pass that returns no episodes costs a full run
+    # (~600k input tokens) and delivers nothing — the cheap setting was the expensive
+    # one. An empty result now escalates one step and retries.
+    reasoning_effort: medium
+    # Reuse the memory agent's container-aware sandbox choice. Rootless Podman
+    # deployments set that to danger-full-access because the container itself is
+    # the isolation boundary and nested bubblewrap cannot start there.
+    sandbox_mode: ${memory.backends.codex.sandbox_mode}
+    timeout_seconds: 1800
+    max_used_percent: 80
+    retry_hours: 6
+  pi:
+    operation: timeline_segmentation
+    # Execution limits bound autonomous investigation, not its search strategy.
+    max_tool_rounds: 96
+    max_tool_calls: 96
+    # Final synthesis must emit the bounded JSON directly. An exact-input replay with
+    # `low` spent all 32K output tokens in one hidden thinking block and returned no
+    # answer; `none` emitted the schema result directly.
+    reasoning_effort: none
+    # A dense screen-heavy day used the complete 24K allowance and was cut off near
+    # its final episodes. Keep final synthesis roomy; dense block condensation retains
+    # its smaller cap and successful block summaries are cached independently.
+    max_tokens: 32000
+    # A third local format attempt is cheaper than abandoning a day and replaying its
+    # already-condensed context through the rebuild repair stage.
+    max_attempts: 3
+    context_block_max_chars: 80000
+    context_block_max_items: 160
+    condense_min_chars: 50000
+    condense_min_items: 80
+    # Qwen may spend a substantial part of the completion budget on internal
+    # reasoning before emitting the compact JSON. A live dense block exhausted 12K.
+    condense_max_tokens: 24000
+    condense_max_attempts: 3
+    # This stage is schema-bound compression, not open-ended reasoning. Hidden
+    # thinking consumed the full 12K live budget without producing the JSON payload.
+    condense_thinking: none
+  thumbnails:
+    # Vision pass that picks which sampled frame depicts an episode.
+    backend: model
+    operation: timeline_thumbnail
+    timeout_seconds: 600
+  immich_visual_evidence:
+    # Complete metadata inventory; bounded pixel exploration of photo-led events.
+    max_assets_per_day: 12
+    max_rounds: 4
+    max_image_views: 48
+    backend: model
+    operation: immich_visual_evidence
+    timeout_seconds: 600
+  # Settled-day vault write. A day is the memory unit for capture evidence because
+  # continuous audio is cut into bounded compute spans, so one meeting can span several
+  # recordings while an episode already has the right bounds.
+  memory:
+    # Only past days within this window are considered, so enabling this on an existing
+    # deployment records the recent days rather than rewriting months of vault at once.
+    lookback_days: 2
+    max_days_per_run: 2
+    # A re-analysis that landed this recently means the day is still moving; regeneration
+    # is non-deterministic, so writing then would record the same stretch twice under
+    # different boundaries.
+    settle_minutes: 60
+    claim_timeout_minutes: 120
+    # After this many failures a day settles into `skipped` with its diagnostic instead
+    # of being re-attempted on every tick forever.
+    max_attempts: 3
+    # ~15K tokens, the size audited memory prompts already reach successfully. A larger
+    # day sheds its lowest-salience non-conversational episodes, and logs which.
+    max_digest_chars: 60000
+
+# Data Audit / auto-clean "level" (thresholds for the auto_clean cron job).
+# Kept separate from cron_jobs.auto_clean so toggling the schedule in the UI
+# does not overwrite these values. Conservative by default: only essentially
+# speech-free recordings are archived.
+data_audit:
+  vad_provider: ten_vad             # swappable VAD backend for audio analysis
+  auto_clean:
+    speech_prob_threshold: 0.5      # VAD frame prob at/above this counts as speech
+    max_speech_fraction: 0.03       # archive only if <= 3% of frames are speech
+    min_duration: 30.0              # ignore clips shorter than this (seconds)
+    max_archive_per_run: 100        # safety cap on archives per sweep
+  export:
+    # Privacy screen for annotation exports. The policy is user-editable per
+    # export in the UI; this is the default prefill. It targets personally
+    # sensitive content (comfort, not a strict PII definition) — names and
+    # identifiers are intentionally kept so annotators can label speakers.
+    sensitivity:
+      policy: |
+        Flag segments I would not be comfortable sharing with an outside
+        annotator because they are personally sensitive. In particular:
+        - my family, household, or living situation
+        - health (physical or mental), medical or therapy details
+        - personal finances, income, debts, or specific expenses
+        - romantic relationships or sex life
+        - religious or political beliefs stated as personal conviction
+        - confidential business deals: named counterparties, terms, or
+          unreleased plans
+        Do NOT flag general technical discussion, abstract product/business
+        strategy, publicly-known facts, or people's names used only for
+        context (annotators need names for speaker labels).
+
+# Engaged browser voice. Engine selection is fixed for each engagement.
+voice:
+  enabled: true
+  vault_retrieval_enabled: false
+  default_engine: modular
+  idle_timeout_seconds: 60
+  max_duration_seconds: 1200
+  vault_timeout_seconds: 15
+  hermes_timeout_seconds: 600

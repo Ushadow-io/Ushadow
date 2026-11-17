@@ -80,7 +80,7 @@ capabilities:
       server_url:
         type: url
         description: "Speaker recognition service endpoint"
-        env: [SPEAKER_SERVER_URL]
+        env: [SPEAKER_SERVICE_URL]
 
   # ==========================================================================
   # Memory Source Capability (Integrations)

@@ -11,7 +11,7 @@ misc_settings:
   use_provider_segments: true
 
 memory:
-  provider: openmemory_mcp
+  provider: chronicle
   timeout_seconds: 1200
   extraction:
     enabled: true
