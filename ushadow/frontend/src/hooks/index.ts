@@ -54,3 +54,8 @@ export type { UseDeploymentActionsResult } from './useDeploymentActions';
 // Sharing hooks
 export { useShare } from './useShare';
 export type { UseShareOptions, UseShareReturn } from './useShare';
+
+// Ledger hooks (timeline, facts, known names) - via the generic service proxy
+export { useLedgerTimeline, useLedgerSearch, useLedgerWhy, useLedgerRetry } from './useLedger';
+export { useLedgerFactActions } from './useLedgerFactActions';
+export { useKnownEntities } from './useKnownEntities';

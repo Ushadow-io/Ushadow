@@ -1,7 +1,7 @@
 import { Link, useLocation, Outlet, useNavigate } from 'react-router-dom'
 import React, { useState, useRef, useEffect } from 'react'
 import { Layers, MessageSquare, Plug, Bot, Workflow, Server, Settings, LogOut, Sun, Moon, Users, Search, Bell, User, ChevronDown, Brain, Home, QrCode, Calendar, Radio } from 'lucide-react'
-import { LayoutDashboard, Network, Flag, FlaskConical, Cloud, Mic, MicOff, Loader2, Sparkles, Zap, Archive } from 'lucide-react'
+import { LayoutDashboard, Network, Flag, FlaskConical, Cloud, Mic, MicOff, Loader2, Sparkles, Zap, Archive, BookOpenCheck } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useCasdoorAuth } from '../../contexts/CasdoorAuthContext'
 import { useTheme } from '../../contexts/ThemeContext'
@@ -128,6 +128,7 @@ export default function Layout() {
       { path: '/memories', label: 'Memories', icon: Brain },
     ] : []),
     { path: '/timeline', label: 'Timeline', icon: Calendar, featureFlag: 'timeline' },
+    { path: '/ledger', label: 'Ledger', icon: BookOpenCheck, badgeVariant: 'beta', featureFlag: 'ledger_memory' },
     { path: '/feed', label: 'Feed', icon: Radio, featureFlag: 'social_feed' },
     { path: '/cluster', label: 'Cluster', icon: Network, badgeVariant: 'beta' },
     { path: '/kubernetes', label: 'Kubernetes', icon: Cloud },

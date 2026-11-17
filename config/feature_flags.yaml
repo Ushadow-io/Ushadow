@@ -121,6 +121,13 @@ flags:
       interest graph"
     type: release
 
+  # Ledger - conversations, facts with proof, and known names from the ledger service
+  ledger_memory:
+    enabled: false
+    description: "Ledger page - Timeline, facts (why / wrong / forget) and known names
+      from the ledger service (beta)"
+    type: release
+
   # Mobile: show conversations from both Chronicle and Mycelia backends
   mobile_dual_source_conversations:
     enabled: true

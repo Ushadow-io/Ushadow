@@ -257,3 +257,71 @@ export const confirmDialog = {
  */
 export const actionButton = (context: string, action: string) =>
   `${context}-${action}` as const
+
+// =============================================================================
+// LEDGER PAGE
+// =============================================================================
+
+/**
+ * LedgerPage - Timeline, Facts and Known names from the ledger service.
+ *
+ * Import: `import LedgerPage from '@/pages/LedgerPage'`
+ *
+ * Page container: `page.container('ledger')`; tabs: `tabs.button(ledger.tabs.facts)`.
+ * The "known names" form uses SettingField: `settingField.input(ledger.knownNames.nameField)`.
+ * Forget / remove confirmation uses ConfirmDialog (`confirm-dialog`, `confirm-dialog-confirm`).
+ */
+export const ledger = {
+  pageName: 'ledger',
+  tabs: { timeline: 'timeline', facts: 'facts', knownNames: 'known-names' },
+  /** "Service not running / not reachable" state */
+  unavailable: 'ledger-unavailable',
+  retry: 'ledger-retry',
+  /** Other request error */
+  error: 'ledger-error',
+  /** `partial` / `partialReasons` warning of an answer */
+  partialWarning: 'ledger-partial-warning',
+  timeline: {
+    prevDay: 'ledger-timeline-prev-day',
+    nextDay: 'ledger-timeline-next-day',
+    today: 'ledger-timeline-today',
+    dateField: 'ledger-timeline-field-date',
+    list: 'ledger-timeline-list',
+    empty: 'ledger-timeline-empty',
+    conversation: (id: string) => `ledger-timeline-conversation-${id}`,
+    gap: (id: string) => `ledger-timeline-gap-${id}`,
+  },
+  facts: {
+    form: 'ledger-facts-search-form',
+    queryField: 'ledger-facts-field-query',
+    search: 'ledger-facts-search',
+    includeClosed: 'ledger-facts-field-include-closed',
+    list: 'ledger-facts-list',
+    empty: 'ledger-facts-empty',
+    whyModal: 'ledger-why-modal',
+  },
+  fact: {
+    row: (id: string) => `ledger-fact-${id}`,
+    confidence: (id: string) => `ledger-fact-${id}-confidence`,
+    heard: (id: string) => `ledger-fact-${id}-heard`,
+    /** Only on a fact with `heard === "unknown"` */
+    unknownSpeaker: (id: string) => `ledger-fact-${id}-unknown-speaker`,
+    /** Only on a closed fact (`validTo` set) */
+    closed: (id: string) => `ledger-fact-${id}-closed`,
+    why: (id: string) => `ledger-fact-${id}-why`,
+    forget: (id: string) => `ledger-fact-${id}-forget`,
+    wrong: (id: string) => `ledger-fact-${id}-wrong`,
+  },
+  knownNames: {
+    form: 'ledger-known-names-form',
+    /** SettingField ids */
+    nameField: 'ledger-known-name',
+    aliasesField: 'ledger-known-aliases',
+    typeField: 'ledger-known-type',
+    add: 'ledger-known-names-add',
+    table: 'ledger-known-names-table',
+    empty: 'ledger-known-names-empty',
+    row: (id: string) => `ledger-known-name-${id}`,
+    remove: (id: string) => `ledger-known-name-${id}-remove`,
+  },
+} as const

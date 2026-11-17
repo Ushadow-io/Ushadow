@@ -220,3 +220,17 @@ async def test_why_fact_scope_missing_forgotten_and_memory_down(api):
     r = await _get(http, "why", factId="mf_alexjob")
     assert r.status_code == 200 and r.json()["partial"] is True
     assert r.json()["partialReasons"] == ["memory_unreachable"] and r.json()["item"] is None
+
+
+async def test_search_kinds_as_one_comma_value_equals_repeated_keys(api):
+    """The Ushadow proxy keeps one value of a repeated key, so the UI sends kinds=a,b."""
+    http, _ = api
+    base = {"userId": USER, "q": "venue"}
+    repeated = await http.get("/v1/search", headers=auth("agent"),
+                              params=[*base.items(), ("kinds", "knowledge"), ("kinds", "action")])
+    comma = await http.get("/v1/search", headers=auth("agent"),
+                           params={**base, "kinds": "knowledge,action"})
+    assert repeated.status_code == 200 and comma.json() == repeated.json()
+    assert {i["kind"] for i in comma.json()["items"]} == {"knowledge", "action"}
+    bad = await http.get("/v1/search", headers=auth("agent"), params={**base, "kinds": "x,action"})
+    assert bad.status_code == 422

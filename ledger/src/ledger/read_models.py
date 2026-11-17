@@ -13,7 +13,14 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from ledger.l2_models import ConvState
 from ledger.schema import CaptureGap, EvidenceRef, Link, LinkKind, TimeRange
@@ -233,6 +240,18 @@ class SearchRequest(_Ranged):
     kinds: list[ItemKind] = Field(default_factory=lambda: list(ItemKind))
     includeClosed: bool = False
     limit: int = Field(default=20, ge=1, le=100)
+
+    @field_validator("kinds", mode="before")
+    @classmethod
+    def _comma_list(cls, value: Any) -> Any:
+        """`kinds=knowledge,action` works like `kinds=knowledge&kinds=action`: a proxy in front
+        of the ledger can keep only one value of a repeated key."""
+        if isinstance(value, str):
+            value = [value]
+        if isinstance(value, list):
+            return [p.strip() for v in value for p in (v.split(",") if isinstance(v, str) else [v])
+                    if not isinstance(p, str) or p.strip()]
+        return value
 
 
 class TimelineRequest(_Ranged):

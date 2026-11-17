@@ -39,3 +39,4 @@
 export { BasePage } from './BasePage'
 export { SettingsPage } from './SettingsPage'
 export { WizardPage } from './WizardPage'
+export { LedgerPage } from './LedgerPage'
