@@ -75,6 +75,8 @@ class MemoryFact(_Loose):
     due: str | None = None
     sensitivity: str | None = None
     conversationId: str | None = None
+    confidence: float | None = None  # 0..1, how sure the memory engine is (None: it tells none)
+    heard: str | None = None  # known | unknown: did the owner or a recognised speaker say it
 
 
 class MemoryEntity(_Loose):

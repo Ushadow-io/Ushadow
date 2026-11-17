@@ -62,7 +62,8 @@ def fact_item(f: MemoryFact) -> Item:
     return Item(id=f.id, kind=ItemKind.action if action else ItemKind.knowledge, subKind=sub,
                 sensitivity=f.sensitivity or "normal", text=f.text, at=f.validAt,
                 validTo=f.invalidAt, source=f.source, direction=f.direction, due=f.due,
-                about=list(f.about), conversationId=f.conversationId, evidence=list(f.evidence))
+                about=list(f.about), conversationId=f.conversationId, evidence=list(f.evidence),
+                confidence=f.confidence, heard=f.heard)
 
 
 def candidate(e: MemoryEntity, match: str, requires: list[str] | None = None) -> EntityCandidate:

@@ -18,6 +18,7 @@ from ledger.clients.memory import (
 from ledger.read_models import Item, ItemKind
 from ledger.scopes import Principal, load_scope_book, owner_for, principal_kind
 from ledger.services.read.gate import allows
+from ledger.services.read.views import fact_item
 
 SECRET = "Kim has a hospital visit"
 
@@ -72,7 +73,8 @@ async def test_client_sends_bearer_and_maps_shapes():
         if request.url.path == "/search":
             return httpx.Response(200, json={"facts": [{"id": "mf_1", "userId": "u", "kind":
                                                         "knowledge", "key": "likes", "text": "x",
-                                                        "source": "agent", "evidence": []}]})
+                                                        "source": "agent", "evidence": [],
+                                                        "confidence": 0.5, "heard": "unknown"}]})
         if request.url.path == "/correct":
             return httpx.Response(404, json={"detail": "no such fact"})
         return httpx.Response(200, json={"facts": [{
@@ -84,6 +86,8 @@ async def test_client_sends_bearer_and_maps_shapes():
     c = _client(handler)
     facts = await c.search("u", FactQuery(q="hello", kinds=["knowledge"]))
     assert facts[0].id == "mf_1"
+    item = fact_item(facts[0])
+    assert (item.confidence, item.heard) == (0.5, "unknown")
     assert seen[0].headers["authorization"] == "Bearer mem-token"
     assert seen[0].url.params["userId"] == "u" and seen[0].url.params["kinds"] == "knowledge"
     [a] = await c.action_facts("u")

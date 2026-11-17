@@ -66,6 +66,10 @@ class Item(ScopedItem):
     people: list[str] = Field(default_factory=list, description="Conversation: names heard")
     state: ConvState | None = None
     conversationId: str | None = Field(default=None, description="Action fact: made from")
+    confidence: float | None = Field(default=None, description="Fact: 0..1, how sure memory is")
+    heard: str | None = Field(default=None, description=(
+        "Fact: known (the owner or a recognised speaker said it) | unknown (only unknown "
+        "speakers did; can be media). Show unknown ones in another style"))
     evidence: list[EvidenceRef] = Field(default_factory=list)
 
 
