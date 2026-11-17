@@ -3,7 +3,8 @@ pairs of open facts on the same subject entity that are very similar (`dup_above
 a pair with the same resolved relation and object; the model judges the rest in batches of
 `dup_batch` pairs per call. A merge keeps one fact (the human one, else the older one), gives it
 the union of both facts' episodes and deletes the other. Every judged pair is recorded as a
-fact_reconcile decision (`pair|a|b`), so it is never asked again; two human facts are left alone."""
+fact_reconcile decision (key: a digest of the two ids), so it is never asked again; two human
+facts are left alone."""
 
 from __future__ import annotations
 
@@ -13,7 +14,9 @@ from memory_service.engine.staged import confidence as conf
 from memory_service.engine.staged import prompts
 from memory_service.engine.staged.s5_write import new_id
 from memory_service.engine.staged.types import Ctx, Decision, StoredFact
-from memory_service.textutil import norm
+from memory_service.textutil import digest, norm
+
+PAIR = "pair"
 
 
 @dataclass
@@ -31,7 +34,7 @@ class _Pair:
 
     @property
     def key(self) -> str:
-        return f"pair|{self.a.id}|{self.b.id}"
+        return digest(PAIR, self.a.id, self.b.id)
 
     @property
     def same_signature(self) -> bool:
@@ -40,7 +43,7 @@ class _Pair:
 
 async def _pairs(ctx: Ctx, limit: int) -> list[_Pair]:
     done = await ctx.store.decisions(ctx.group, "fact_reconcile")
-    seen = {d.key for d in done if d.key.startswith("pair|")}
+    seen = {d.key for d in done}  # pair keys are digests of the two fact ids
     out: list[_Pair] = []
     for a_id, b_id in await ctx.store.duplicate_pairs(ctx.group, ctx.cfg.dup_above, limit + len(seen)):
         a, b = await ctx.store.get_fact(ctx.group, a_id), await ctx.store.get_fact(ctx.group, b_id)
@@ -67,6 +70,8 @@ async def merge_facts(ctx: Ctx, p: _Pair, by: str) -> bool:
         return False
     keep, drop = sorted((a, b), key=lambda f: (not f.human, f.created_at, f.id))
     keep.episodes += [e for e in drop.episodes if e not in keep.episodes]
+    for ep, words in drop.variants.items():
+        keep.say(ep, words)
     keep.confidence = max(keep.confidence, drop.confidence)
     if drop.valid_at and (keep.valid_at is None or drop.valid_at < keep.valid_at):
         keep.valid_at = drop.valid_at

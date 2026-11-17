@@ -7,7 +7,8 @@ by character sequence (difflib ratio), facts by shared words (Jaccard)."""
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, field
+import json
+from dataclasses import asdict, dataclass, field
 from difflib import SequenceMatcher
 from typing import Protocol
 
@@ -32,6 +33,9 @@ class GraphStore(Protocol):
     async def delete_entity(self, group: str, entity_id: str) -> None: ...
     async def get_entities(self, group: str, ids: list[str]) -> dict[str, StoredEntity]: ...
     async def drop_orphan_entities(self, group: str) -> None: ...
+    async def entities_from_episode(self, group: str, episode_id: str) -> list[StoredEntity]:
+        """Entities the episode created or gave an alias to."""
+        ...
     # facts
     async def entity_facts(self, group: str, entity_id: str,
                            limit: int | None = None) -> list[StoredFact]: ...
@@ -54,6 +58,9 @@ class GraphStore(Protocol):
     async def decisions(self, group: str, kind: str | None = None) -> list[Decision]: ...
     async def current_decisions(self, group: str, roots: list[str]) -> dict[str, Decision]: ...
     async def review_queue(self, group: str, below: float, limit: int) -> list[Decision]: ...
+    async def delete_decisions(self, group: str, roots: list[str]) -> None:
+        """Delete whole chains (every decision whose root is listed)."""
+        ...
     async def clear(self, group: str) -> None: ...
 
 
@@ -127,6 +134,10 @@ class MemoryGraphStore:
     async def get_entities(self, group: str, ids: list[str]) -> dict[str, StoredEntity]:
         g = self._g(group)
         return {i: copy.deepcopy(g.entities[i]) for i in ids if i in g.entities}
+
+    async def entities_from_episode(self, group: str, episode_id: str) -> list[StoredEntity]:
+        return [copy.deepcopy(e) for e in self._g(group).entities.values()
+                if episode_id in e.name_sources or any(episode_id in s for s in e.alias_sources.values())]
 
     async def drop_orphan_entities(self, group: str) -> None:
         g = self._g(group)
@@ -218,6 +229,10 @@ class MemoryGraphStore:
         todo.sort(key=lambda d: (d.confidence, d.at))
         return [copy.deepcopy(d) for d in todo[:limit]]
 
+    async def delete_decisions(self, group: str, roots: list[str]) -> None:
+        g, gone = self._g(group), set(roots)
+        g.decisions = [d for d in g.decisions if d.root not in gone]
+
     async def clear(self, group: str) -> None:
         self.groups.pop(group, None)
 
@@ -226,6 +241,9 @@ class MemoryGraphStore:
         parts: list[str] = []
         for g in self.groups.values():
             parts += [ln for ep in g.episodes.values() for ln in ep.lines]
-            parts += [f"{f.source_name} {f.relation} {f.target_name} {f.text}" for f in g.facts.values()]
-            parts += [" ".join(e.names()) for e in g.entities.values()]
+            parts += [f"{f.source_name} {f.relation} {f.target_name} {f.text} {json.dumps(f.variants)}"
+                      for f in g.facts.values()]
+            parts += [f"{e.name} {' '.join(e.aliases)} {json.dumps(e.alias_sources)} {e.name_sources}"
+                      for e in g.entities.values()]
+            parts += [json.dumps(asdict(d), default=str) for d in g.decisions]
         return "\n".join(parts)

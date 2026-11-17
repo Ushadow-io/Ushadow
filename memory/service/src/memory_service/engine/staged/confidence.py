@@ -30,6 +30,11 @@ MODEL_INCONCLUSIVE = 0.3  # the model could not tell (or gave an answer we could
 CERTAINTY = {"high": 0.85, "medium": 0.7, "low": 0.45}  # the model's own coarse certainty
 REVIEW_DECIDED = 0.9  # the deeper review (with the lines) said same or distinct
 REVIEW_INCONCLUSIVE = 0.4  # the deeper review could not tell either (not asked again)
+# A fact or entity whose decision chain is gone. Erase deletes a chain only when its subject is
+# gone, so a surviving fact meets this only for data written before decisions existed or after
+# a partial failure. It counts as "no evidence against": the fact's own score and the other
+# decisions still bound the result, and a missing record must not hide a fact a person relies on.
+MISSING_DECISION = 1.0
 BANDS = ((0.4, "<0.4"), (0.6, "0.4-0.6"), (0.8, "0.6-0.8"), (1.01, ">=0.8"))
 
 
@@ -70,7 +75,7 @@ async def effective(store: GraphStore, group: str, facts: list[StoredFact]) -> d
 
     def score(root: str | None) -> float:
         d = current.get(root) if root else None
-        return d.confidence if d else 1.0
+        return d.confidence if d else MISSING_DECISION
 
     out = {}
     for f in facts:

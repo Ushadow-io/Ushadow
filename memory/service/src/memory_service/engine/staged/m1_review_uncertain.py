@@ -30,14 +30,16 @@ class ReviewReport:
 
 
 async def merge_entities(ctx: Ctx, keep: StoredEntity, drop: StoredEntity) -> None:
-    """Re-point every fact of `drop` to `keep`, keep its names as aliases, delete it. Fact names
-    stay as written (see StoredFact), so the service's fact ids do not change."""
+    """Re-point every fact of `drop` to `keep`, keep its names as aliases (with the episodes that
+    said them), delete it. Fact names stay as written (see StoredFact), so the service's fact ids
+    do not change."""
     for f in await ctx.store.entity_facts(ctx.group, drop.id):
         f.source_id = keep.id if f.source_id == drop.id else f.source_id
         f.target_id = keep.id if f.target_id == drop.id else f.target_id
         await ctx.store.update_fact(ctx.group, f)
-    have = keep.names()
-    keep.aliases += [n for n in (drop.name, *drop.aliases) if norm(n) and norm(n) not in have]
+    keep.add_name(drop.name, drop.name_sources)
+    for alias in drop.aliases:
+        keep.add_name(alias, drop.alias_sources.get(alias, []))
     await ctx.store.update_entity(ctx.group, keep)
     await ctx.store.delete_entity(ctx.group, drop.id)
 

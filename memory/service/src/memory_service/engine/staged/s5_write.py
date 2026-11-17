@@ -8,7 +8,7 @@ supports (with proof hints and effective confidence), and the ids of the facts i
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from memory_service.engine.base import EpisodeResult
@@ -27,7 +27,7 @@ from memory_service.engine.staged.types import (
     StoredFact,
 )
 from memory_service.schema import EvidenceRef
-from memory_service.textutil import norm
+from memory_service.textutil import digest
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,7 @@ class WriteInput:
     ext: Extraction
     match: EntityMatch
     decisions: list[FactDecision]
+    episode_id: str = field(default_factory=lambda: str(uuid.uuid4()))  # known before anything is written
 
 
 @dataclass(frozen=True)
@@ -52,23 +53,27 @@ def new_id() -> str:
     return str(uuid.uuid4())
 
 
-def _record(ctx: Ctx, d: EntityDecision | FactDecision, kind: str, key: str) -> Decision:
-    return Decision(id=new_id(), kind=kind, key=key, subject_id="", outcome=d.outcome,
-                    confidence=d.confidence, decided_by=d.by,
+def _record(ctx: Ctx, d: EntityDecision | FactDecision, kind: str, key: str, inp: WriteInput) -> Decision:
+    """The key is a digest: the parts hold the episode name and a spoken name."""
+    return Decision(id=new_id(), kind=kind, key=digest(kind, inp.name, key), subject_id="",
+                    outcome=d.outcome, confidence=d.confidence, decided_by=d.by,
                     model=ctx.llm.model if d.by == "model" else None, candidates=list(d.candidates),
-                    policy_version=conf.POLICY_VERSION, at=ctx.clock())
+                    policy_version=conf.POLICY_VERSION, at=ctx.clock(), episode_id=inp.episode_id)
 
 
 async def _entity(ctx: Ctx, e: NewEntity, d: EntityDecision, rec: Decision) -> StoredEntity:
+    """Every alias is recorded with this episode as its source."""
+    ep = rec.episode_id or ""
     stored = await ctx.store.get_entity(ctx.group, d.entity_id) if d.entity_id else None
     if stored is None:  # new, inconclusive, or the matched one is gone meanwhile
-        stored = StoredEntity(id=new_id(), name=e.name, type=e.type, aliases=list(e.aliases),
-                              match_root=rec.id, created_at=ctx.clock())
+        stored = StoredEntity(id=new_id(), name=e.name, type=e.type, match_root=rec.id,
+                              created_at=ctx.clock(), name_sources=[ep])
+        for alias in e.aliases:
+            stored.add_name(alias, [ep])
         await ctx.store.create_entity(ctx.group, stored)
         return stored
-    fresh = [n for n in e.names() if norm(n) and norm(n) not in stored.names()]
-    if fresh:  # the names used here become aliases of the matched entity
-        stored.aliases += fresh
+    changed = [stored.add_name(n, [ep]) for n in e.names()]  # names used here: its name or aliases
+    if any(changed):
         await ctx.store.update_entity(ctx.group, stored)
     return stored
 
@@ -77,7 +82,7 @@ async def write_entities(ctx: Ctx, inp: WriteInput) -> dict[str, _End]:
     ends: dict[str, _End] = {}
     for key, e in inp.ext.entities.items():
         d = inp.match.decisions[key]
-        rec = _record(ctx, d, "entity_match", f"entity|{inp.name}|{key}")
+        rec = _record(ctx, d, "entity_match", key, inp)
         stored = await _entity(ctx, e, d, rec)
         rec.subject_id = stored.id
         rec.target_ids = [stored.id] if d.outcome == "same" else []
@@ -110,11 +115,12 @@ async def _close(ctx: Ctx, fact_id: str, at: datetime) -> bool:
     return True
 
 
-async def _support(ctx: Ctx, d: FactDecision, ep: StoredEpisode) -> StoredFact | None:
+async def _support(ctx: Ctx, d: FactDecision, ep: StoredEpisode, words: list[str]) -> StoredFact | None:
     old = await ctx.store.get_fact(ctx.group, d.ids[0])
     if old is not None:
         if ep.id not in old.episodes:
             old.episodes.append(ep.id)
+        old.say(ep.id, words)
         old.confidence = max(old.confidence, d.confidence)  # said again: at least as sure
         await ctx.store.update_fact(ctx.group, old)
     return old
@@ -123,13 +129,16 @@ async def _support(ctx: Ctx, d: FactDecision, ep: StoredEpisode) -> StoredFact |
 async def _one_fact(ctx: Ctx, inp: WriteInput, d: FactDecision, ep: StoredEpisode,
                     ends: dict[str, _End]) -> tuple[StoredFact, list[str]]:
     f = inp.ext.facts[d.index]
-    if d.outcome == "duplicate" and (old := await _support(ctx, d, ep)) is not None:
+    # this episode's own words: the names as said here, not the stored entity's name
+    words = [f.text, inp.ext.entities[f.subject].name, inp.ext.entities[f.object].name]
+    if d.outcome == "duplicate" and (old := await _support(ctx, d, ep, words)) is not None:
         return old, []
     s, o = ends[f.subject], ends[f.object]
-    new = StoredFact(id=new_id(), source_id=s.id, target_id=o.id, source_name=s.name, target_name=o.name,
+    new = StoredFact(id=new_id(), source_id=s.id, target_id=o.id, source_name=words[1], target_name=words[2],
                      relation=f.relation, text=f.text, valid_at=_valid_at(inp, f),
                      invalid_at=f.invalid_at, episodes=[ep.id], created_at=ctx.clock(),
-                     confidence=d.confidence, source_match=s.match, target_match=o.match)
+                     confidence=d.confidence, source_match=s.match, target_match=o.match,
+                     variants={ep.id: words}, text_episode=ep.id)
     await ctx.store.create_fact(ctx.group, new)
     at = new.valid_at or inp.reference_time
     closed = [i for i in d.ids if d.outcome == "contradicts" and await _close(ctx, i, at)]
@@ -137,17 +146,19 @@ async def _one_fact(ctx: Ctx, inp: WriteInput, d: FactDecision, ep: StoredEpisod
 
 
 async def write_episode(ctx: Ctx, inp: WriteInput) -> EpisodeResult:
+    ep = StoredEpisode(id=inp.episode_id, name=inp.name, reference_time=inp.reference_time,
+                       lines=[ln.render() for ln in inp.ext.lines])
+    # first, so its entities, facts and decisions always have an episode (an erase running at
+    # the same time sweeps decisions whose episode is gone)
+    await ctx.store.save_episode(ctx.group, ep)
     ends = await write_entities(ctx, inp)
-    ep = StoredEpisode(id=new_id(), name=inp.name, reference_time=inp.reference_time,
-                       lines=[ln.render() for ln in inp.ext.lines],
-                       entity_ids=sorted({e.id for e in ends.values()}))
-    await ctx.store.save_episode(ctx.group, ep)  # first, so its facts always have an episode
+    ep.entity_ids = sorted({e.id for e in ends.values()})
     touched: list[tuple[StoredFact, list[EvidenceRef]]] = []
     closed: list[str] = []
     for d in inp.decisions:
         fact, ended = await _one_fact(ctx, inp, d, ep, ends)
         closed += ended
-        rec = _record(ctx, d, "fact_reconcile", f"fact|{inp.name}|{d.index}")
+        rec = _record(ctx, d, "fact_reconcile", str(d.index), inp)
         rec.subject_id, rec.target_ids = fact.id, list(d.ids)
         await ctx.store.add_decision(ctx.group, rec)
         if fact.id not in ep.fact_ids:

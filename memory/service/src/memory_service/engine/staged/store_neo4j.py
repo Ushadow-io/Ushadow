@@ -5,14 +5,16 @@ client. So `engine/graphiti.py`'s read methods work on this data too (it is reus
 queries, delete and clear). Every query is scoped by group.
 
 Our extra fields are plain node/edge properties: entity `entity_type`, `aliases`, `names_norm`,
-`match_root`; edge `source_name`, `target_name`, `relation_norm`, `confidence`, `source_match`,
-`target_match`, `decided_by`. Decision records are `StagedDecision` nodes (not linked to the graph).
+`match_root`, `name_sources`, `alias_sources` (JSON), `source_episodes`; edge `source_name`,
+`target_name`, `relation_norm`, `confidence`, `source_match`, `target_match`, `decided_by`.
+Decision records are `StagedDecision` nodes (not linked to the graph).
 Similarity is cosine of Graphiti's embeddings, as raw cosine in -1..1 (Neo4j's
 vector.similarity.cosine gives (1 + cos) / 2; it is converted back)."""
 
 from __future__ import annotations
 
 import itertools
+import json
 import os
 import time
 import uuid
@@ -34,13 +36,15 @@ from memory_service.engine.staged.types import (
 from memory_service.textutil import norm
 
 _ENTITY = """n.uuid AS id, n.name AS name, n.entity_type AS type, n.aliases AS aliases,
-    n.match_root AS match_root, n.summary AS summary, n.created_at AS created_at"""
+    n.match_root AS match_root, n.summary AS summary, n.created_at AS created_at,
+    n.name_sources AS name_sources, n.alias_sources AS alias_sources"""
 _FACT = """e.uuid AS id, s.uuid AS source_id, t.uuid AS target_id,
     coalesce(e.source_name, s.name) AS source_name, coalesce(e.target_name, t.name) AS target_name,
     e.name AS relation, e.fact AS text, e.valid_at AS valid_at,
     coalesce(e.invalid_at, e.expired_at) AS invalid_at, e.episodes AS episodes,
     e.decided_by AS decided_by, e.created_at AS created_at, e.confidence AS confidence,
-    e.source_match AS source_match, e.target_match AS target_match"""
+    e.source_match AS source_match, e.target_match AS target_match,
+    e.variants AS variants, e.text_episode AS text_episode"""
 _EDGE = "MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity) WHERE e.group_id = $g"
 _OPEN = "e.invalid_at IS NULL AND e.expired_at IS NULL"
 _CURRENT = """MATCH (d:StagedDecision) WHERE d.group_id = $g {where}
@@ -51,7 +55,17 @@ _seq = itertools.count()
 def _entity(r: dict[str, Any]) -> StoredEntity:
     return StoredEntity(id=r["id"], name=r["name"], type=r.get("type") or "Entity",
                         aliases=list(r.get("aliases") or []), match_root=r.get("match_root"),
-                        summary=r.get("summary") or "", created_at=_dt(r["created_at"]))  # type: ignore[arg-type]
+                        summary=r.get("summary") or "", created_at=_dt(r["created_at"]),  # type: ignore[arg-type]
+                        name_sources=list(r.get("name_sources") or []),
+                        alias_sources=json.loads(r.get("alias_sources") or "{}"))
+
+
+def _name_props(e: StoredEntity) -> dict[str, Any]:
+    """Name provenance as node properties. A map cannot be a Neo4j property: `alias_sources` is
+    JSON; `source_episodes` lists every episode in it, so an erase can find the node."""
+    return {"aliases": e.aliases, "names_norm": sorted(e.names()), "name_sources": e.name_sources,
+            "alias_sources": json.dumps(e.alias_sources, sort_keys=True),
+            "source_episodes": sorted({*e.name_sources, *(x for s in e.alias_sources.values() for x in s)})}
 
 
 def _fact(r: dict[str, Any]) -> StoredFact:
@@ -61,7 +75,14 @@ def _fact(r: dict[str, Any]) -> StoredFact:
                       invalid_at=_dt(r["invalid_at"]), episodes=list(r["episodes"] or []),
                       human=r.get("decided_by") == "human", created_at=_dt(r["created_at"]),  # type: ignore[arg-type]
                       confidence=1.0 if r.get("confidence") is None else float(r["confidence"]),
-                      source_match=r.get("source_match"), target_match=r.get("target_match"))
+                      source_match=r.get("source_match"), target_match=r.get("target_match"),
+                      variants=json.loads(r.get("variants") or "{}"), text_episode=r.get("text_episode"))
+
+
+def _words(f: StoredFact) -> dict[str, Any]:
+    """The fact's shown words and each supporting episode's words (JSON: no map properties)."""
+    return {"fact": f.text, "source_name": f.source_name, "target_name": f.target_name,
+            "variants": json.dumps(f.variants, sort_keys=True), "text_episode": f.text_episode}
 
 
 def _decision(props: dict[str, Any]) -> Decision:
@@ -114,17 +135,25 @@ class Neo4jGraphStore:
 
         node = EntityNode(uuid=e.id, name=e.name, group_id=group, labels=[], created_at=e.created_at,
                           summary=e.summary, attributes={
-                              "entity_type": e.type, "aliases": e.aliases, "names_norm": sorted(e.names()),
-                              "match_root": e.match_root})
+                              "entity_type": e.type, "match_root": e.match_root, **_name_props(e)})
         await node.generate_name_embedding(self.embedder)
         await self._q("RETURN 1")  # indices first
         await node.save(self.driver)
 
     async def update_entity(self, group: str, e: StoredEntity) -> None:
-        await self._q("MATCH (n:Entity {uuid: $u}) WHERE n.group_id = $g SET n.aliases = $aliases, "
-                      "n.names_norm = $names, n.match_root = $root, n.summary = $summary",
-                      u=e.id, g=group, aliases=e.aliases, names=sorted(e.names()), root=e.match_root,
-                      summary=e.summary)
+        old = await self.get_entity(group, e.id)
+        await self._q("MATCH (n:Entity {uuid: $u}) WHERE n.group_id = $g SET n += $p",
+                      u=e.id, g=group, p={"name": e.name, "match_root": e.match_root, "summary": e.summary,
+                                          **_name_props(e)})
+        if old is not None and old.name != e.name:  # renamed (erase): the old name's vector goes too
+            await self._q("MATCH (n:Entity {uuid: $u}) WHERE n.group_id = $g "
+                          "CALL db.create.setNodeVectorProperty(n, 'name_embedding', $v)",
+                          u=e.id, g=group, v=await self._vec(e.name))
+
+    async def entities_from_episode(self, group: str, episode_id: str) -> list[StoredEntity]:
+        rows = await self._q(f"MATCH (n:Entity) WHERE n.group_id = $g AND $ep IN n.source_episodes "
+                             f"RETURN {_ENTITY}", g=group, ep=episode_id)
+        return [_entity(r) for r in rows]
 
     async def delete_entity(self, group: str, entity_id: str) -> None:
         await self._q("MATCH (n:Entity {uuid: $u}) WHERE n.group_id = $g DETACH DELETE n",
@@ -190,7 +219,8 @@ class Neo4jGraphStore:
                           attributes={"decided_by": "human" if f.human else "staged",
                                       "source_name": f.source_name, "target_name": f.target_name,
                                       "relation_norm": norm(f.relation), "confidence": f.confidence,
-                                      "source_match": f.source_match, "target_match": f.target_match})
+                                      "source_match": f.source_match, "target_match": f.target_match,
+                                      **_words(f)})
         await edge.generate_embedding(self.embedder)
         await self._q("RETURN 1")  # indices first
         await edge.save(self.driver)
@@ -201,12 +231,17 @@ class Neo4jGraphStore:
             "AND (s.uuid <> $s OR t.uuid <> $t) MATCH (ns:Entity {uuid: $s}), (nt:Entity {uuid: $t}) "
             "CREATE (ns)-[e2:RELATES_TO]->(nt) SET e2 = properties(e) DELETE e",
             u=f.id, g=group, s=f.source_id, t=f.target_id)
+        old = await self.get_fact(group, f.id)
         await self._q(
             "MATCH ()-[e:RELATES_TO {uuid: $u}]->() WHERE e.group_id = $g SET e.episodes = $episodes, "
-            "e.valid_at = $valid, e.invalid_at = $invalid, e.confidence = $conf, "
+            "e.valid_at = $valid, e.invalid_at = $invalid, e.confidence = $conf, e += $words, "
             "e.expired_at = CASE WHEN $invalid IS NULL THEN null ELSE coalesce(e.expired_at, $now) END",
             u=f.id, g=group, episodes=f.episodes, valid=f.valid_at, invalid=f.invalid_at,
-            conf=f.confidence, now=f.invalid_at)
+            conf=f.confidence, now=f.invalid_at, words=_words(f))
+        if old is not None and old.text != f.text:  # reworded (erase): the old words' vector goes too
+            await self._q("MATCH ()-[e:RELATES_TO {uuid: $u}]->() WHERE e.group_id = $g "
+                          "CALL db.create.setRelationshipVectorProperty(e, 'fact_embedding', $v)",
+                          u=f.id, g=group, v=await self._vec(f.text))
 
     async def delete_fact(self, group: str, fact_id: str) -> None:
         await self.reader.delete_fact(group, fact_id)
@@ -265,6 +300,10 @@ class Neo4jGraphStore:
             "RETURN properties(d) AS p ORDER BY d.confidence, d.seq LIMIT $n",
             g=group, outcomes=list(REVIEWABLE), below=below, n=limit)
         return [_decision(r["p"]) for r in rows]
+
+    async def delete_decisions(self, group: str, roots: list[str]) -> None:
+        await self._q("MATCH (d:StagedDecision) WHERE d.group_id = $g AND d.root IN $roots DELETE d",
+                      g=group, roots=roots)
 
     async def clear(self, group: str) -> None:
         await self.reader.clear(group)

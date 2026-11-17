@@ -9,6 +9,7 @@ from datetime import datetime
 
 from memory_service.engine.base import EngineEntity, EngineFact, EpisodeResult, MaintainReport
 from memory_service.engine.staged import confidence as conf
+from memory_service.engine.staged import erase
 from memory_service.engine.staged.llm import LLM
 from memory_service.engine.staged.m1_review_uncertain import review_uncertain
 from memory_service.engine.staged.m2_merge_duplicate_facts import merge_duplicate_facts
@@ -21,6 +22,7 @@ from memory_service.engine.staged.settings import StagedSettings
 from memory_service.engine.staged.store import GraphStore
 from memory_service.engine.staged.types import Ctx, Decision, StoredEntity, StoredFact, utcnow
 from memory_service.models import EpisodeInput, Statement
+from memory_service.textutil import digest
 
 
 class StagedEngine:
@@ -70,17 +72,8 @@ class StagedEngine:
         return [f.to_engine(confidence=scores[f.id]) for f in facts if f.human or scores[f.id] >= floor]
 
     async def remove_episode(self, group: str, engine_episode_id: str) -> None:
-        """Like Graphiti: facts only this episode supported go; facts it closed stay closed."""
-        ctx = self._ctx(group)
-        for f in await self.store.all_facts(group):
-            if engine_episode_id in f.episodes:
-                f.episodes.remove(engine_episode_id)
-                if f.episodes or f.human:
-                    await self.store.update_fact(group, f)
-                else:
-                    await self.store.delete_fact(group, f.id)
-        await ctx.store.delete_episode(group, engine_episode_id)
-        await self.store.drop_orphan_entities(group)
+        """Nothing said only in this episode stays (see erase.py); facts it closed stay closed."""
+        await erase.remove_episode(self._ctx(group), engine_episode_id)
 
     async def facts(self, group: str) -> list[EngineFact]:
         """`min_confidence` filters here and in `search` only; lookups by id never hide a fact."""
@@ -120,7 +113,7 @@ class StagedEngine:
                        valid_at=at, human=True, created_at=self.clock())
         await ctx.store.create_fact(group, f)
         await ctx.store.add_decision(group, Decision(
-            id=new_id(), kind="fact_reconcile", key=f"human|{f.id}", subject_id=f.id, outcome="new",
+            id=new_id(), kind="fact_reconcile", key=digest("human", f.id), subject_id=f.id, outcome="new",
             confidence=1.0, decided_by="human", policy_version=conf.POLICY_VERSION, at=self.clock()))
         return f.to_engine(confidence=1.0)
 

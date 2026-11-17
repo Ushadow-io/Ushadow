@@ -103,6 +103,10 @@ class Extraction:
 
 @dataclass
 class StoredEntity:
+    """Name provenance: `name_sources` and `alias_sources` say which episodes said the name and
+    each alias. An alias exists only while it has a source, so erasing the last episode that said
+    a name removes it (see erase.py for the entity's own name)."""
+
     id: str
     name: str
     type: str = "Entity"
@@ -110,15 +114,50 @@ class StoredEntity:
     match_root: str | None = None  # the match decision (chain) that created it; gives its confidence
     summary: str = ""
     created_at: datetime = field(default_factory=utcnow)
+    name_sources: list[str] = field(default_factory=list)  # episodes that said `name`
+    alias_sources: dict[str, list[str]] = field(default_factory=dict)  # alias -> episodes
 
     def names(self) -> set[str]:
         return {norm(n) for n in (self.name, *self.aliases) if norm(n)}
 
+    def add_name(self, name: str, sources: list[str]) -> bool:
+        """Record that `sources` said `name`: the entity's name, else an alias. Never makes an
+        alias without a source. Gives whether anything changed."""
+        sources = [s for s in sources if s]
+        if not sources or not norm(name):
+            return False
+        if norm(name) == norm(self.name):
+            have = self.name_sources
+        else:
+            alias = next((a for a in self.aliases if norm(a) == norm(name)), None)
+            if alias is None:
+                alias = name.strip()
+                self.aliases.append(alias)
+            have = self.alias_sources.setdefault(alias, [])
+        fresh = [s for s in sources if s not in have]
+        have += fresh
+        return bool(fresh)
+
+    def forget_episode(self, episode_id: str) -> None:
+        """Take an erased episode out of every source list; drop aliases left with none."""
+        if episode_id in self.name_sources:
+            self.name_sources.remove(episode_id)
+        for alias in list(self.aliases):
+            src = self.alias_sources.get(alias, [])
+            if episode_id in src:
+                src.remove(episode_id)
+            if not src:
+                self.aliases.remove(alias)
+                self.alias_sources.pop(alias, None)
+
 
 @dataclass
 class StoredFact:
-    """A fact edge. `source_name`/`target_name` are fixed when the fact is written, so the
-    service's fact id (a hash of the names) stays the same when maintenance re-points the edge."""
+    """A fact edge. `source_name`/`target_name` are the names as said in the episode that wrote
+    it, fixed then, so the service's fact id (a hash of the names) stays the same when maintenance
+    re-points the edge. `variants` keeps each supporting episode's own words
+    (episode -> [text, source name, target name]); `text_episode` says whose words are shown, so
+    an erase can switch to a surviving episode's words."""
 
     id: str
     source_id: str
@@ -135,6 +174,25 @@ class StoredFact:
     confidence: float = 1.0  # its own reconcile decision; entity scores are added at read time
     source_match: str | None = None  # root of the match decision that linked its subject
     target_match: str | None = None
+    variants: dict[str, list[str]] = field(default_factory=dict)
+    text_episode: str | None = None
+
+    def say(self, episode_id: str, words: list[str]) -> None:
+        """Keep this episode's own wording of the fact."""
+        self.variants.setdefault(episode_id, list(words))
+
+    def unsay(self, episode_id: str) -> bool:
+        """Forget an episode's words. If they were the ones shown, show a surviving supporting
+        episode's words instead. Gives False when no supporting episode's words are left."""
+        self.variants.pop(episode_id, None)
+        if self.text_episode != episode_id:
+            return True
+        nxt = next((e for e in self.episodes if e in self.variants), None)
+        if nxt is None:
+            return False
+        self.text, self.source_name, self.target_name = self.variants[nxt]
+        self.text_episode = nxt
+        return True
 
     @property
     def closed(self) -> bool:
@@ -182,7 +240,7 @@ class Decision:
 
     id: str
     kind: str  # entity_match | fact_reconcile
-    key: str  # what was decided, e.g. "entity|<episode>|<name>" or "pair|<fact a>|<fact b>"
+    key: str  # a digest of what was decided (never clear text: it can name a person)
     subject_id: str  # the stored entity / fact the decision is about
     outcome: str  # entity: same | new | inconclusive; fact: new | duplicate | contradicts
     confidence: float
@@ -195,6 +253,7 @@ class Decision:
     supersedes: str | None = None
     deep: bool = False  # made by the deeper review: never reviewed again
     at: datetime = field(default_factory=utcnow)
+    episode_id: str | None = None  # the episode it came from (a review inherits its root's)
 
     def __post_init__(self) -> None:
         self.root = self.root or self.id

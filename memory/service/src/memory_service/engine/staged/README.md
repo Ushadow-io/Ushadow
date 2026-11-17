@@ -60,6 +60,7 @@ flowchart TD
 | `s5_write.py` | Database: writes everything, records decisions, returns the `EpisodeResult`. |
 | `m1_review_uncertain.py` | Maintenance: deeper review of low-confidence entity matches, found by query. |
 | `m2_merge_duplicate_facts.py` | Maintenance: merge near-duplicate facts of one entity. |
+| `erase.py` | `remove_episode`: takes out everything only that episode said (facts, words, names, decisions). |
 | `confidence.py` | Every confidence number, and the read-time fact confidence. |
 | `prompts.py` | All prompts and JSON schemas. |
 | `llm.py` | OpenAI-compatible JSON client with per-stage counters; `FakeLLM` for tests. |
@@ -96,7 +97,11 @@ Scores come from how a decision was made, not from a number the model invents
   those two entities. Resolving an entity therefore changes its facts' scores without rewriting
   them.
 - Decision field meanings follow the ledger's `Link` record: `key`, `decided_by`,
-  `policy_version`, `model`, `confidence`.
+  `policy_version`, `model`, `confidence`. The `key` is a digest (`textutil.digest`), never
+  clear text. Each decision names the `episode_id` it came from (a review keeps its root's).
+- A decision chain missing at read time counts as 1.0 (`MISSING_DECISION`): erase deletes a
+  chain only when nothing reads it, so this is only old data or a partial failure, and a missing
+  record should not hide a fact; the fact's own score and other decisions still bound it.
 
 ## Settings
 
@@ -134,9 +139,31 @@ Neo4j holds Graphiti's shape (`Entity`, `RELATES_TO`, `Episodic`, `MENTIONS`), w
 graphiti-core's own `save` methods, so `engine/graphiti.py` reads it too. Our extra fields are
 plain properties on the nodes and edges (`aliases`, `names_norm`, `match_root`, `source_name`,
 `target_name`, `confidence`, ...): simpler than a side collection. Decision records are
-`StagedDecision` nodes keyed by `group_id`, not linked into the graph. A fact keeps the entity
-names it was written with, so the service's fact ids (a hash of the names) do not change when
-maintenance re-points it to another entity.
+`StagedDecision` nodes keyed by `group_id`, not linked into the graph. A fact keeps the names
+as said in the episode that wrote it, so the service's fact ids (a hash of the names) do not
+change when maintenance re-points it to another entity. Maps (`alias_sources`, fact `variants`)
+are JSON strings in Neo4j.
+
+## Erase (`remove_episode`, erase.py)
+
+Nothing said only in the removed episode stays:
+
+- **Facts**: each fact keeps every supporting episode's own words (`variants`). The removed
+  episode leaves the support list and its words go. A fact it worded switches to a surviving
+  episode's words (and is re-embedded); with no support or words left, it is deleted.
+- **Names**: every name and alias records the episodes that said it (`name_sources`,
+  `alias_sources`); no code path makes an alias without a source, and a merge carries the
+  sources over. The removed episode leaves every list; an alias left without a source is
+  dropped. If the entity's own name has no source left, it stays only if a surviving fact was
+  written with it; else the alias with most sources (or a surviving fact's name) becomes the name.
+- **Episode** node and its text (which the review job reads) are deleted; then entities no fact
+  points at.
+- **Decisions**: the episode's chains (and chains of earlier removed episodes) are deleted,
+  except a chain a surviving entity or fact still reads its confidence from.
+- `clear(group)` deletes everything of the group, decisions included.
+
+A fact that switches words gets a new service fact id (a hash of its names); its older proofs
+no longer match, so the service hides it until it is proved again (a later ingest or a rebuild).
 
 ## Counters
 

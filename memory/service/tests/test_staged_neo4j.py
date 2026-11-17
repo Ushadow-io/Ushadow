@@ -106,3 +106,54 @@ async def test_staged_engine_on_neo4j(setup):
     assert len((await eng.get_fact(g, acme.engine_id)).episodes) == 1
     await eng.delete_fact(g, human.engine_id)
     assert await eng.get_fact(g, human.engine_id) is None
+
+
+async def _group_text(store, group: str) -> tuple[int, str]:
+    """Every node and relationship property of the group (vectors left out), as lower-case text."""
+    rows = await store._q(
+        "MATCH (n) WHERE n.group_id = $g OPTIONAL MATCH (n)-[r]-() "
+        "RETURN properties(n) AS n, collect(properties(r)) AS rs", g=group)
+    skip = {"name_embedding", "fact_embedding"}
+    parts = [{k: v for k, v in p.items() if k not in skip} for r in rows for p in [r["n"], *r["rs"]]]
+    return len(rows), repr(parts).lower()
+
+
+def _kathy_match(req):
+    out = []
+    for it in req.payload:
+        kath = next((c["id"] for c in it["candidates"] if c["name"].startswith("Kath")), None)
+        same = it["name"] == "Kathy" and kath
+        out.append({"id": it["id"], "answer": "same" if same else "new", "candidate": kath if same else None,
+                    "certainty": "high"})
+    return {"decisions": out}
+
+
+async def test_erase_on_neo4j_leaves_no_trace(setup):
+    from tests.staged_helpers import facts
+
+    llm = FakeLLM({"extract": [facts(("Katherine", "works at", "Acme", ["L1"])),
+                               facts(("Kathy", "likes", "Tea", ["L1"]),
+                                     ("Kathy", "works at", "Acme", ["L1"]))],
+                   "match": _kathy_match,
+                   "reconcile": lambda r: {"decisions": [{"id": it["id"], "answer": "new", "known_ids": [],
+                                                          "certainty": "high"} for it in r.payload]}})
+    eng = StagedEngine(setup.store, llm, StagedSettings(store="neo4j", same_above=0.999, new_below=0.0))
+    g = setup.group
+    a = await eng.add_episode(g, episode("conv-a@1", [("Sam", "Katherine works at Acme, as you know.")]))
+    b = await eng.add_episode(g, episode("conv-b@1", [("Sam", "Kathy likes Tea and Kathy works at Acme.")],
+                                         T0 + DAY))
+    [x] = await setup.store.find_entities(g, ["Kathy"])
+    assert x.name == "Katherine" and x.alias_sources == {"Kathy": [b.engine_episode_id]}
+    keys = await setup.store._q("MATCH (d:StagedDecision) WHERE d.group_id = $g RETURN d.key AS k", g=g)
+    assert keys and all(len(r["k"]) == 64 and "kath" not in r["k"] for r in keys)  # digests
+
+    await eng.remove_episode(g, a.engine_episode_id)
+    _, text = await _group_text(setup.store, g)
+    assert "katherine" not in text and "as you know" not in text
+    [x] = await setup.store.find_entities(g, ["Kathy"])
+    assert (x.name, x.aliases) == ("Kathy", [])
+    assert sorted(f.text for f in await eng.facts(g)) == ["Kathy likes Tea", "Kathy works at Acme"]
+
+    await eng.remove_episode(g, b.engine_episode_id)
+    n, text = await _group_text(setup.store, g)
+    assert n == 0, text

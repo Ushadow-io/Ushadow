@@ -101,7 +101,7 @@ async def test_duplicate_facts_are_merged_by_model_and_by_rule_and_recorded():
     [kept] = await eng.facts(G)
     assert kept.engine_id == r1.facts[0].engine_id  # the older one stays
     assert set(kept.episodes) >= {r1.engine_episode_id, r2.engine_episode_id}
-    merges = [d for d in await eng.store.decisions(G, "fact_reconcile") if d.key.startswith("pair|")]
+    merges = [d for d in await eng.store.decisions(G, "fact_reconcile") if d.deep]
     assert sorted(d.decided_by for d in merges) == ["model", "rule"]
     assert all(d.outcome == "duplicate" and d.target_ids == [kept.engine_id] for d in merges)
 
