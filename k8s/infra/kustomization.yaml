@@ -5,9 +5,11 @@ resources:
   # mongo is managed separately — do not apply via kustomize to avoid selector conflicts
   # - mongo-deployment.yaml
   # - mongo-service.yaml
-  - postgres-deployment.yaml
-  - postgres-service.yaml
-  - qdrant-deployment.yaml
-  - qdrant-service.yaml
+  # postgres and qdrant: the cluster's shared ones in the 'root' namespace are used;
+  # ushadow finds them with its infra scan. Uncomment for a cluster without them.
+  # - postgres-deployment.yaml
+  # - postgres-service.yaml
+  # - qdrant-deployment.yaml
+  # - qdrant-service.yaml
   - redis-deployment.yaml
   - redis-service.yaml
