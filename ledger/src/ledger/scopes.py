@@ -19,8 +19,10 @@ Read from LEDGER_SCOPES (inline JSON) or else LEDGER_SCOPES_FILE (a JSON file), 
 - a principal WITH an entry is an "agent": it may not use the internal service routes
   (/conversations, /ingest, ...), which bypass scopes, unless `internal: true`.
 
-Per-user tokens later: a principal bound to one user gets `users: [that user]` (or a new
-Principal.kind checked in `owner_for`); no route changes.
+A USER principal is a person signed in to Ushadow (see routers/auth.py). It needs no entry in
+the book: it has the whole read API for its own data (`USER_SCOPE`), and for nobody else's. It
+may write (correct, forget). It may not use the internal service routes. It may say `me` for
+its own user id.
 """
 
 from __future__ import annotations
@@ -44,10 +46,14 @@ KIND_CLASSES = frozenset(
 SENSITIVITIES = frozenset({"*", *(s.value for s in Sensitivity)})
 
 
+ME = "me"  # a user principal may say this for its own user id
+
+
 @dataclass(frozen=True)
 class Principal:
     name: str
-    kind: str = "service"  # service | agent
+    kind: str = "service"  # service | agent | user
+    user_id: str | None = None  # user only: who it is, from its token (never from a request)
 
 
 class Scope(BaseModel):
@@ -129,6 +135,16 @@ def load_scope_book() -> ScopeBook:
     return book
 
 
+USER_SCOPE = Scope(kinds=frozenset({"*"}), sensitivity=frozenset({"*"}), write=True)
+
+
+def scope_of(principal: Principal, book: ScopeBook) -> Scope | None:
+    """What the principal may see through the read API. None: nothing."""
+    if principal.kind == "user":
+        return USER_SCOPE if principal.user_id else None
+    return book.get(principal.name)
+
+
 def principal_kind(name: str, book: ScopeBook) -> str:
     scope = book.get(name)
     return "agent" if scope is not None and not scope.internal else "service"
@@ -139,9 +155,13 @@ def owner_for(principal: Principal, user_id: str, scope: Scope | None = None) ->
 
     Internal service routes (scope None): only a trusted service principal, for any user.
     Read API (scope given): the principal's scope must allow that user.
+    A user principal: only itself (its token's user id, or `me`), and only on the read API.
     """
     if not user_id or not user_id.strip():
         return None
+    if principal.kind == "user":
+        own = principal.user_id
+        return own if own and scope is not None and user_id in (own, ME) else None
     if scope is None:
         return user_id if principal.kind == "service" else None
     return user_id if scope.allows_user(user_id) else None

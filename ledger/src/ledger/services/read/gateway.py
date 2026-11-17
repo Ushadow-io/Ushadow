@@ -28,7 +28,7 @@ from ledger.read_models import (
     WriteAnswer,
     WriteRequest,
 )
-from ledger.scopes import Principal, Scope, ScopeBook, load_scope_book, owner_for
+from ledger.scopes import Principal, Scope, ScopeBook, load_scope_book, owner_for, scope_of
 from ledger.services.read import gate
 from ledger.services.read.answers import ReadDeps, ReadHandlers
 from ledger.services.read.brief import BriefHandlers
@@ -54,17 +54,21 @@ class ReadGateway:
             CorrectRequest: self._writes.correct, ForgetRequest: self._writes.forget,
         }
 
-    def scope_for(self, principal: Principal, user_id: str) -> Scope | Refusal:
-        scope = self._scopes().get(principal.name)
-        if scope is None or owner_for(principal, user_id, scope) is None:
+    def scope_for(self, principal: Principal, user_id: str) -> tuple[Scope, str] | Refusal:
+        """The caller's scope and the owner it acts for (a user principal's `me` is resolved)."""
+        scope = scope_of(principal, self._scopes())
+        owner = owner_for(principal, user_id, scope) if scope is not None else None
+        if scope is None or owner is None:
             log.info("read api refused principal=%s", principal.name)
             return FORBIDDEN
-        return scope
+        return scope, owner
 
     async def read(self, principal: Principal, req: ReadRequest) -> Answer | Refusal:
-        scope = self.scope_for(principal, req.userId)
-        if isinstance(scope, Refusal):
-            return scope
+        allowed = self.scope_for(principal, req.userId)
+        if isinstance(allowed, Refusal):
+            return allowed
+        scope, owner = allowed
+        req = req.model_copy(update={"userId": owner})
         answer = await self._readers[type(req)](req)
         if isinstance(answer, Refusal):
             return answer
@@ -77,9 +81,11 @@ class ReadGateway:
         return answer
 
     async def write(self, principal: Principal, req: WriteRequest) -> WriteAnswer | Refusal:
-        scope = self.scope_for(principal, req.userId)
-        if isinstance(scope, Refusal):
-            return scope
+        allowed = self.scope_for(principal, req.userId)
+        if isinstance(allowed, Refusal):
+            return allowed
+        scope, owner = allowed
+        req = req.model_copy(update={"userId": owner})
         if not scope.write:
             return FORBIDDEN
         targets = await self._writes.target_items(req)

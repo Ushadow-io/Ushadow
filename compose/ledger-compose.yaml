@@ -33,6 +33,10 @@ services:
       - LEDGER_PORT=8200
       # Required. The service refuses all calls (except /health) when this is not set.
       - LEDGER_TOKEN=${LEDGER_TOKEN:?set LEDGER_TOKEN}
+      # Unified auth with Ushadow (as Chronicle does): the Ushadow backend proxy
+      # (/api/services/ledger/proxy/...) sends a JWT signed with this key. Such a token is a USER
+      # principal: the read API (/v1) for that user's own data only. Empty = no user tokens.
+      - AUTH_SECRET_KEY=${AUTH_SECRET_KEY:-}
       # Model for the conversation layer (OpenAI-compatible). Empty = rules only.
       - LEDGER_LLM_BASE_URL=${LEDGER_LLM_BASE_URL:-}
       - LEDGER_LLM_API_KEY=${LEDGER_LLM_API_KEY:-}

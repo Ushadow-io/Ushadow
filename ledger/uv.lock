@@ -465,6 +465,7 @@ dependencies = [
     { name = "mcp" },
     { name = "motor" },
     { name = "pydantic" },
+    { name = "pyjwt" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -484,6 +485,7 @@ requires-dist = [
     { name = "mcp", specifier = "==2.3.0" },
     { name = "motor", specifier = ">=3.5" },
     { name = "pydantic", specifier = ">=2.7" },
+    { name = "pyjwt", specifier = ">=2.8" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 

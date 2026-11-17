@@ -10,7 +10,13 @@ token is 401. Tokens are compared in constant time and never logged.
 A principal with an entry in the scope book is an "agent": it may use the read API (/v1, /mcp)
 within its scope, and not the internal service routes. Any other principal is a trusted
 SERVICE (the Chronicle adapter, the memory service) that may assert a `userId` on the internal
-routes. `ledger.scopes.owner_for` is the one seam where per-user tokens can be added later.
+routes.
+
+A person signed in to Ushadow: the Ushadow backend proxy (/api/services/ledger/proxy/...) sends
+a JWT that Ushadow signs with AUTH_SECRET_KEY (HS256, issuer and audience `ushadow`, `sub` =
+the user id). With AUTH_SECRET_KEY set (LEDGER_USER_JWT_SECRET wins), such a token is a USER
+principal: the read API for its own data only (`ledger.scopes.owner_for`). The user id comes
+from the token, never from the request. No secret set: no user tokens are accepted.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ import hmac
 import logging
 import os
 
+import jwt
 from fastapi import Depends, HTTPException, Query, Request
 
 from ledger.scopes import Principal, load_scope_book, owner_for, principal_kind
@@ -48,6 +55,30 @@ def configured_tokens() -> dict[str, str]:
     return tokens
 
 
+USER_JWT_ISSUER = "ushadow"
+USER_JWT_AUDIENCE = "ushadow"
+
+
+def user_jwt_secret() -> str:
+    env = os.environ
+    return (env.get("LEDGER_USER_JWT_SECRET") or env.get("AUTH_SECRET_KEY") or "").strip()
+
+
+def user_from_jwt(token: str | None, secret: str) -> Principal | None:
+    """A valid Ushadow user token, or None. HS256 only; signature, expiry, issuer, audience and
+    a subject are all required."""
+    if not token or not secret:
+        return None
+    try:
+        claims = jwt.decode(token, secret, algorithms=["HS256"], audience=USER_JWT_AUDIENCE,
+                            issuer=USER_JWT_ISSUER,
+                            options={"require": ["exp", "sub", "iss", "aud"]})
+    except jwt.PyJWTError:
+        return None
+    sub = str(claims.get("sub") or "").strip()
+    return Principal(name="user", kind="user", user_id=sub) if sub else None
+
+
 def bearer(header: str | None) -> str | None:
     scheme, _, value = (header or "").partition(" ")
     return value.strip() if scheme.lower() == "bearer" and value.strip() else None
@@ -55,17 +86,20 @@ def bearer(header: str | None) -> str | None:
 
 def authenticate(authorization: str | None) -> Principal:
     """The one token check, for HTTP routes and the MCP endpoint alike. Raises AuthError."""
-    tokens = configured_tokens()
-    if not tokens:
+    tokens, secret = configured_tokens(), user_jwt_secret()
+    if not tokens and not secret:
         raise AuthError(503, "ledger auth is not configured (set LEDGER_TOKEN)")
     given = bearer(authorization)
     match = None
     for name, token in tokens.items():  # compare against all, in constant time each
         if given is not None and hmac.compare_digest(given.encode(), token.encode()):
             match = name
-    if match is None:
+    if match is not None:
+        return Principal(name=match, kind=principal_kind(match, load_scope_book()))
+    user = user_from_jwt(given, secret)
+    if user is None:
         raise AuthError(401, "missing or invalid bearer token")
-    return Principal(name=match, kind=principal_kind(match, load_scope_book()))
+    return user
 
 
 def require_principal(request: Request) -> Principal:
