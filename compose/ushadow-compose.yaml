@@ -10,10 +10,12 @@ x-ushadow:
     description: "Service orchestration platform backend (FastAPI)"
     requires: []  # Ushadow is self-contained
     route_path: /api  # Tailscale route for API
+    tags: ["root"]  # Core platform: hidden in the catalog unless 'Show root services' is on
   ushadow-frontend:
     display_name: "Ushadow Frontend"
     description: "Service orchestration platform UI (React)"
     requires: []
+    tags: ["root"]
 
 services:
   ushadow-backend:

@@ -137,3 +137,12 @@ x-ushadow:
     - casdoor
     - mongodb
   provides: public-share-access
+  # Root services: hidden in the catalog unless 'Show root services' is on.
+  share-dmz-backend:
+    tags: ["root"]
+  share-dmz-frontend:
+    tags: ["root"]
+  mongodb:
+    tags: ["root"]
+  tailscale:
+    tags: ["root"]

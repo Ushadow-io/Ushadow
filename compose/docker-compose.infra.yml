@@ -11,8 +11,24 @@
 # USHADOW METADATA (ignored by Docker, read by ushadow backend)
 # =============================================================================
 x-ushadow:
+  # Root services: shared infrastructure, hidden in the catalog unless 'Show root services' is on.
+  mongo:
+    tags: ["root"]
+  mongo-init:
+    tags: ["root"]
+  redis:
+    tags: ["root"]
+  qdrant:
+    tags: ["root"]
+  postgres:
+    tags: ["root"]
+  neo4j:
+    tags: ["root"]
+  casdoor:
+    tags: ["root"]
   ollama:
     id: ollama-compose
+    provider_id: ollama-net  # use the Ollama provider's credential fields (URL, model)
     display_name: "Ollama (Docker)"
     description: "Local LLM inference server with OpenAI-compatible API"
     requires: []

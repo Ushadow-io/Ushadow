@@ -63,3 +63,8 @@ networks:
   ushadow-network:
     name: ushadow-network
     external: true
+
+# Root services: hidden in the catalog unless 'Show root services' is on.
+x-ushadow:
+  backend:
+    tags: ["root"]

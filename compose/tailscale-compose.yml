@@ -18,7 +18,7 @@ x-ushadow:
     description: "Tailscale Serve HTTPS proxy for secure external access"
     requires: []
     provides: tailscale
-    tags: ["networking", "proxy", "security"]
+    tags: ["root", "networking", "proxy", "security"]
 
 services:
   tailscale:

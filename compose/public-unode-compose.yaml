@@ -117,3 +117,8 @@ x-ushadow:
   zone: public
   funnel: enabled
   description: "Virtual public worker unode with Tailscale Funnel enabled for hosting DMZ services"
+  # Root services: hidden in the catalog unless 'Show root services' is on.
+  tailscale-public:
+    tags: ["root"]
+  public-unode-manager:
+    tags: ["root"]
