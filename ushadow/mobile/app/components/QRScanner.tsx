@@ -31,7 +31,6 @@ export interface UshadowConnectionData {
   ip: string;
   port: number;
   api_url: string;  // Full URL to unode backend (e.g., "http://100.64.1.5:8360")
-  auth_token?: string;  // JWT token for authenticating with ushadow and chronicle (v3+)
   envname?: string;  // Environment name (v4+)
 }
 

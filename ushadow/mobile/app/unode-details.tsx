@@ -449,7 +449,7 @@ export default function UNodeDetailsPage() {
   };
 
   // Handle UNode found from discovery (for adding new nodes)
-  const handleUnodeFound = async (apiUrl: string, streamUrl: string, token?: string, chronicleApiUrl?: string, hostname?: string) => {
+  const handleUnodeFound = async (apiUrl: string, streamUrl: string, chronicleApiUrl?: string, hostname?: string) => {
     // Ensure apiUrl is always the base URL (remove any /api/... path)
     const baseApiUrl = apiUrl.replace(/\/api\/.*$/, '');
     const name = new URL(baseApiUrl).hostname.split('.')[0] || 'UNode';

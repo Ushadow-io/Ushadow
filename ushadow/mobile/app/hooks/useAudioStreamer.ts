@@ -15,7 +15,6 @@
 import { create } from '@bufbuild/protobuf';
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Platform } from 'react-native';
-import NetInfo from '@react-native-community/netinfo';
 
 import {
   CaptureCapabilitiesSchema,
@@ -68,17 +67,23 @@ export interface RelayStatus {
 
 export interface UseAudioStreamerOptions {
   onLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
-  /** Not sent in audio v2 mode; kept so existing callers compile. */
+  /** Packets and bytes this phone sent in the session, about once a second. */
   onRelayStatus?: (status: RelayStatus) => void;
 }
 
-// Upstream Chronicle declares OMI packets as 60 ms. The server rejects any
-// packet that does not decode to exactly this duration. UNVERIFIED on our
-// device firmware: if OMI sends 10/20 ms frames, this must change.
-const WEARABLE_FRAME_MS = 60 as const;
+// Chronicle rejects any packet that does not decode to exactly the declared
+// duration. Verified on a real OMI (2026-11-07): packets decode to 320 samples
+// at 16 kHz = 20 ms. Chronicle's docs still say 60 ms for OMI-NEO; they are wrong
+// for this firmware.
+const WEARABLE_FRAME_MS = 20 as const;
 const PHONE_FRAME_MS = 20 as const;
 
-const MAX_RECONNECT_ATTEMPTS = 5;
+// ~11 min of retries (3 s doubling to a 30 s cap). Matches the packet buffer below, so
+// a long network gap (locked phone, Wi-Fi <-> cellular) is retried and then replayed.
+const MAX_RECONNECT_ATTEMPTS = 25;
+// Packets kept while the socket is down: 10 min of 20 ms Opus (~3 MB). When full,
+// the oldest packets go first.
+const MAX_PENDING_PACKETS = 30_000;
 const BASE_RECONNECT_MS = 3000;
 const MAX_RECONNECT_MS = 30000;
 const HEARTBEAT_MS = 25000;
@@ -129,7 +134,12 @@ function tokenFromUrl(url: string): string {
 }
 
 export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStreamer => {
-  const { onLog } = options || {};
+  const { onLog, onRelayStatus } = options || {};
+  // Session totals across reconnects, for the session log. Reset on a user stop.
+  const sessionPacketsRef = useRef(0);
+  const sessionBytesRef = useRef(0);
+  const onRelayStatusRef = useRef(onRelayStatus);
+  onRelayStatusRef.current = onRelayStatus;
   const [isStreaming, setIsStreaming] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
@@ -146,6 +156,17 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
   const sequenceRef = useRef(0);
   const monotonicOriginRef = useRef<number | null>(null);
   const packetCountRef = useRef(0);
+  // Packets that arrived while the socket was down. Sent first, with their original
+  // capture times, when the next capture starts. Cleared on a user stop.
+  const pendingRef = useRef<Array<{ opus: Uint8Array; capturedAtMs: number; monotonicMs: number }>>([]);
+  // Packets lost because the pending buffer was full.
+  const droppedCountRef = useRef(0);
+  // Last monotonic offset sent on this capture; Chronicle rejects a live clock that
+  // does not advance, and background event batches can share a millisecond.
+  const lastOffsetUsRef = useRef(-1);
+  const flushPendingRef = useRef<((socket: AudioV2Socket) => void) | null>(null);
+  // Last close code / server error, shown in the app log when the socket closes.
+  const lastCloseDetailRef = useRef('');
   const mountedRef = useRef(true);
   const startStreamingRef = useRef<UseAudioStreamer['startStreaming'] | null>(null);
 
@@ -176,6 +197,15 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
     manuallyStoppedRef.current = true;
     clearTimers();
     await closeSocket(true);
+    onRelayStatusRef.current?.({
+      destinations: [],
+      bytes_relayed: sessionBytesRef.current,
+      chunks_relayed: sessionPacketsRef.current,
+    });
+    sessionPacketsRef.current = 0;
+    sessionBytesRef.current = 0;
+    pendingRef.current = [];
+    droppedCountRef.current = 0;
     onLog?.('disconnected', 'Manually stopped streaming');
     setStateSafe(setIsStreaming, false);
     setStateSafe(setIsConnecting, false);
@@ -220,6 +250,12 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
     reconnectTimeoutRef.current = setTimeout(() => {
       reconnectTimeoutRef.current = null;
       if (manuallyStoppedRef.current) return;
+      // startStreaming closes the current socket first; never kill a healthy one.
+      if (socketRef.current?.readyState === WebSocket.OPEN) {
+        setStateSafe(setIsRetrying, false);
+        setStateSafe(setRetryCount, 0);
+        return;
+      }
       startStreamingRef.current?.(currentUrlRef.current, 'streaming', 'opus', phoneRef.current)
         .then(() => {
           setStateSafe(setIsRetrying, false);
@@ -248,12 +284,6 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
       setStateSafe(setError, msg);
       throw new Error(msg);
     }
-    const netState = await NetInfo.fetch();
-    if (!netState.isConnected || !netState.isInternetReachable) {
-      setStateSafe(setError, 'No internet connection.');
-      throw new Error('No internet connection.');
-    }
-
     manuallyStoppedRef.current = false;
     currentUrlRef.current = trimmed;
     phoneRef.current = phone;
@@ -280,7 +310,8 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
         setStateSafe(setIsStreaming, false);
         setStateSafe(setIsConnecting, false);
         if (!manuallyStoppedRef.current) {
-          onLog?.('disconnected', 'Audio connection closed');
+          onLog?.('disconnected', 'Audio connection closed',
+            `${lastCloseDetailRef.current}; sent ${packetCountRef.current}, dropped ${droppedCountRef.current}`);
           setStateSafe(setError, 'Connection closed; attempting to reconnect.');
           attemptReconnect();
         }
@@ -288,6 +319,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
       onDiagnostic: event => {
         if (event.stage === 'server_error' || event.stage === 'transport_closed') {
           console.warn(`[AudioStreamer] ${event.stage}: ${event.detail ?? ''}`);
+          lastCloseDetailRef.current = `${event.stage}: ${event.detail ?? ''}`;
         }
       },
     });
@@ -297,7 +329,9 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
       await socket.connect();
       sequenceRef.current = 0;
       monotonicOriginRef.current = null;
+      lastOffsetUsRef.current = -1;
       packetCountRef.current = 0;
+      lastCloseDetailRef.current = '';
       const capabilities = phone ? typedCapabilities(phone.capabilities) : undefined;
       await socket.beginCapture({
         captureEpoch: phone?.captureEpoch ?? 0,
@@ -307,6 +341,7 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
         capabilities,
       });
       if (capabilities) socket.voiceReady(capabilities);
+      flushPendingRef.current?.(socket);
       heartbeatRef.current = setInterval(() => {
         try { socket.heartbeat(performance.now()); } catch { /* closed */ }
       }, HEARTBEAT_MS);
@@ -328,19 +363,31 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
 
   startStreamingRef.current = startStreaming;
 
-  const sendPacket = useCallback((opus: Uint8Array, capturedAtMs: number, monotonicMs: number) => {
-    const socket = socketRef.current;
-    if (!socket?.activeBinding || socket.readyState !== WebSocket.OPEN || !opus.length) return;
+  const transmit = useCallback((socket: AudioV2Socket, opus: Uint8Array, capturedAtMs: number, monotonicMs: number) => {
     monotonicOriginRef.current ??= monotonicMs;
+    const offsetUs = Math.max(
+      lastOffsetUsRef.current + 1,
+      Math.round((monotonicMs - monotonicOriginRef.current) * 1000),
+    );
+    lastOffsetUsRef.current = offsetUs;
     try {
       socket.sendPacket({
         sequence: sequenceRef.current++,
         capturedAtMs,
-        monotonicOffsetUs: Math.max(0, Math.round((monotonicMs - monotonicOriginRef.current) * 1000)),
+        monotonicOffsetUs: offsetUs,
         deviceMonotonicTimestampUs: monotonicMs * 1000,
         opus,
       });
       packetCountRef.current += 1;
+      sessionPacketsRef.current += 1;
+      sessionBytesRef.current += opus.length;
+      if (sessionPacketsRef.current % 50 === 1) {
+        onRelayStatusRef.current?.({
+          destinations: [],
+          bytes_relayed: sessionBytesRef.current,
+          chunks_relayed: sessionPacketsRef.current,
+        });
+      }
       if (packetCountRef.current === 1 || packetCountRef.current % 250 === 0) {
         console.log(`[AudioStreamer] Sent packet #${packetCountRef.current} (${opus.length} bytes)`);
       }
@@ -348,6 +395,33 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
       setStateSafe(setError, (e as Error).message || 'Error sending audio data.');
     }
   }, [setStateSafe]);
+
+  const sendPacket = useCallback((opus: Uint8Array, capturedAtMs: number, monotonicMs: number) => {
+    if (!opus.length || manuallyStoppedRef.current) return;
+    const socket = socketRef.current;
+    if (socket?.activeBinding && socket.readyState === WebSocket.OPEN) {
+      transmit(socket, opus, capturedAtMs, monotonicMs);
+      return;
+    }
+    const pending = pendingRef.current;
+    pending.push({ opus, capturedAtMs, monotonicMs });
+    if (pending.length > MAX_PENDING_PACKETS) {
+      pending.shift();
+      droppedCountRef.current += 1;
+    }
+  }, [transmit]);
+
+  // Send what arrived during the gap, oldest first, before any new live packet.
+  // JS is single-threaded, so no live packet can slip in between.
+  const flushPending = useCallback((socket: AudioV2Socket) => {
+    const pending = pendingRef.current;
+    if (!pending.length) return;
+    pendingRef.current = [];
+    for (const p of pending) transmit(socket, p.opus, p.capturedAtMs, p.monotonicMs);
+    onLog?.('connected', `Sent ${pending.length} packets saved during the gap`,
+      `${(pending.length * WEARABLE_FRAME_MS / 1000).toFixed(1)} s of audio; ${droppedCountRef.current} lost (buffer full)`);
+  }, [onLog, transmit]);
+  flushPendingRef.current = flushPending;
 
   const sendAudio = useCallback((opusPacket: Uint8Array) => {
     if (phoneRef.current) return; // phone frames go through sendFrame
@@ -362,17 +436,9 @@ export const useAudioStreamer = (options?: UseAudioStreamerOptions): UseAudioStr
 
   const getWebSocketReadyState = useCallback(() => socketRef.current?.readyState, []);
 
-  // Reconnect when the network comes back
-  useEffect(() => {
-    const sub = NetInfo.addEventListener(state => {
-      const online = !!state.isConnected && !!state.isInternetReachable;
-      if (online && !manuallyStoppedRef.current && currentUrlRef.current
-        && socketRef.current?.readyState !== WebSocket.OPEN && !reconnectTimeoutRef.current) {
-        attemptReconnect();
-      }
-    });
-    return () => sub();
-  }, [attemptReconnect]);
+  // No NetInfo-driven reconnect: the socket's own close event is the only signal.
+  // NetInfo flickers during Wi-Fi/cellular handoff and on background/foreground,
+  // and acting on it killed healthy sockets (the Omi app removed the same gate, #6311).
 
   useEffect(() => () => clearTimers(), [clearTimers]);
 

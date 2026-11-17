@@ -22,7 +22,7 @@ import { colors, theme, spacing, borderRadius, fontSize } from '../theme';
 import { useFeatureFlagContext } from '../contexts/FeatureFlagContext';
 
 interface LeaderDiscoveryProps {
-  onLeaderFound?: (apiUrl: string, streamUrl: string, authToken?: string, chronicleApiUrl?: string, hostname?: string) => Promise<void> | void;
+  onLeaderFound?: (apiUrl: string, streamUrl: string, chronicleApiUrl?: string, hostname?: string) => Promise<void> | void;
 }
 
 export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
@@ -62,7 +62,7 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
       console.log('[LeaderDiscovery] Successfully connected to UNode, saving and refreshing feature flags...');
 
       // Save the UNode to storage first so feature flag refresh reads the correct environment
-      await onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, data.auth_token, result.leader.chronicleApiUrl, result.leader.hostname);
+      await onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, result.leader.chronicleApiUrl, result.leader.hostname);
 
       // Now refresh feature flags — active UNode is already saved, so the correct API URL is used
       try {
@@ -78,7 +78,7 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
   const handleConnectToScanned = async () => {
     const result = await connectToScanned();
     if (result.success && result.leader && onLeaderFound) {
-      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, undefined, result.leader.chronicleApiUrl, result.leader.hostname);
+      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, result.leader.chronicleApiUrl, result.leader.hostname);
     }
   };
 
@@ -87,7 +87,7 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
 
     const result = await connectToLeader(savedLeader.tailscaleIp, savedLeader.port);
     if (result.success && result.leader && onLeaderFound) {
-      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, undefined, result.leader.chronicleApiUrl, result.leader.hostname);
+      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, result.leader.chronicleApiUrl, result.leader.hostname);
     }
   };
 
@@ -101,13 +101,13 @@ export const LeaderDiscovery: React.FC<LeaderDiscoveryProps> = ({
 
     const result = await connectToEndpoint(trimmed);
     if (result.success && result.leader && onLeaderFound) {
-      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, undefined, result.leader.chronicleApiUrl, result.leader.hostname);
+      onLeaderFound(result.leader.apiUrl, result.leader.streamUrl, result.leader.chronicleApiUrl, result.leader.hostname);
     }
   };
 
   const handleConnectToLeader = () => {
     if (leader && onLeaderFound) {
-      onLeaderFound(leader.apiUrl, leader.streamUrl, undefined, leader.chronicleApiUrl, leader.hostname);
+      onLeaderFound(leader.apiUrl, leader.streamUrl, leader.chronicleApiUrl, leader.hostname);
     }
   };
 
