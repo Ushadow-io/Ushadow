@@ -18,6 +18,7 @@ import {
   SafeAreaView,
   Alert,
   TouchableOpacity,
+  Platform,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, theme, spacing, borderRadius, fontSize } from '../../theme';
@@ -38,6 +39,10 @@ import { useOmiConnection } from '../../contexts/OmiConnectionContext';
 import { useDeviceConnection } from '../../hooks/useDeviceConnection';
 import { useAudioListener } from '../../hooks/useAudioListener';
 import { useAudioStreamer } from '../../hooks/useAudioStreamer';
+import { useOmiNativeAudio } from '../../hooks/useOmiNativeAudio';
+import { useAppLifecycle } from '../../hooks/useAppLifecycle';
+import { useOmiStorageLog } from '../../contexts/OmiStorageContext';
+import { OmiStorageRow } from './OmiStorageRow';
 
 // Storage
 import {
@@ -54,7 +59,7 @@ import {
   setActiveUnode as setActiveUnodeStorage,
   parseStreamUrl,
 } from '../../_utils/unodeStorage';
-import { appendTokenToUrl, saveAuthToken } from '../../_utils/authStorage';
+import { appendTokenToUrl, clearAuthToken } from '../../_utils/authStorage';
 
 // API
 import { verifyUnodeAuth } from '../../services/chronicleApi';
@@ -122,6 +127,10 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   // Live Activity for OMI streaming (phone mic manages its own via useStreaming)
   const omiLiveActivity = useLiveActivity();
 
+  // Set while an OMI stream is wanted: the BLE audio callback to (re)subscribe with.
+  const omiAudioHandlerRef = useRef<((bytes: Uint8Array) => Promise<void>) | null>(null);
+  const startAudioListenerRef = useRef<((onAudio: (bytes: Uint8Array) => void) => Promise<void>) | null>(null);
+
   // OMI device connection with bluetooth logging
   const {
     connectedDeviceId,
@@ -133,6 +142,17 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     currentCodec, // BROKEN: codec detection unreliable, so we hardcode Opus for all OMI devices
   } = useDeviceConnection(omiConnection, {
     onLog: onBluetoothLog,
+    // Reconnect only while the user wants an OMI stream running.
+    shouldAutoReconnect: () => !!omiAudioHandlerRef.current,
+    // The BLE audio subscription dies with the link; resubscribe after a reconnect.
+    onConnect: () => {
+      const handler = omiAudioHandlerRef.current;
+      // The native link resubscribes by itself; only the JS listener needs this.
+      if (handler && !omiNative.available) {
+        startAudioListenerRef.current?.(handler)
+          .catch(err => console.warn('[UnifiedStreaming] OMI audio resubscribe failed:', err));
+      }
+    },
   });
 
   // Derive OMI connection status for SourceSelector
@@ -152,6 +172,36 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     startAudioListener,
     stopAudioListener,
   } = useAudioListener(omiConnection, isOmiConnected);
+  startAudioListenerRef.current = startAudioListener;
+
+  // On iOS the Omi audio comes through the native BLE link, which keeps running
+  // while the phone is locked. Elsewhere the JS listener above is used.
+  const omiNative = useOmiNativeAudio();
+  const [isNativeOmiListening, setIsNativeOmiListening] = useState(false);
+  const startOmiAudio = useCallback(async (deviceId: string, onAudio: (bytes: Uint8Array) => void) => {
+    if (!omiNative.available) return startAudioListener(onAudio);
+    await omiNative.start(deviceId, onAudio);
+    setIsNativeOmiListening(true);
+  }, [omiNative, startAudioListener]);
+  // Show what the native link did (packets, link changes, JS events) in the BT log.
+  const logNativeReport = useCallback(() => {
+    omiNative.readReport().then(report => {
+      if (!report) return;
+      onBluetoothLog?.('connected', report.summary, report.newLines.join('\n'));
+    }).catch(err => console.warn('[UnifiedStreaming] native BLE report failed:', err));
+  }, [omiNative, onBluetoothLog]);
+  const stopOmiAudio = useCallback(async () => {
+    if (!omiNative.available) return stopAudioListener();
+    setIsNativeOmiListening(false);
+    logNativeReport();
+    await omiNative.stop();
+  }, [omiNative, stopAudioListener, logNativeReport]);
+
+  // Back in the foreground: show what the native link did while we were away.
+  useAppLifecycle({ onForeground: logNativeReport });
+
+  // Audio the Omi saved to its own storage during Bluetooth gaps: upload it.
+  useOmiStorageLog(onBluetoothLog);
 
   // WebSocket streamer for OMI
   const omiStreamer = useAudioStreamer({
@@ -166,7 +216,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   // Combined state
   const isStreaming = selectedSource.type === 'microphone'
     ? phoneStreaming.isStreaming
-    : (isListeningAudio && omiStreamer.isStreaming);
+    : ((isListeningAudio || isNativeOmiListening) && omiStreamer.isStreaming);
 
   // Debug logging for streaming state
   useEffect(() => {
@@ -448,7 +498,8 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       if (selectedSource.type === 'microphone') {
         await phoneStreaming.stopStreaming();
       } else {
-        await stopAudioListener();
+        omiAudioHandlerRef.current = null; // no BLE auto-reconnect after a user stop
+        await stopOmiAudio();
         omiStreamer.stopStreaming();
         omiLiveActivity.stopActivity();
       }
@@ -468,7 +519,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     isStreaming,
     selectedSource,
     phoneStreaming,
-    stopAudioListener,
+    stopOmiAudio,
     omiStreamer,
     connectedDeviceId,
     connectOmiDevice,
@@ -536,11 +587,13 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         await omiStreamer.startStreaming(streamUrl, 'streaming', codec);
 
         // Start OMI audio listener
-        await startAudioListener(async (audioBytes: Uint8Array) => {
+        const onOmiAudio = async (audioBytes: Uint8Array) => {
           if (audioBytes.length > 0) {
             await omiStreamer.sendAudio(audioBytes);
           }
-        });
+        };
+        omiAudioHandlerRef.current = onOmiAudio;
+        await startOmiAudio(selectedSource.deviceId, onOmiAudio);
 
         omiLiveActivity.startActivity(selectedSource.deviceName ?? 'OMI Device');
       }
@@ -562,7 +615,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
     connectedDeviceId,
     connectOmiDevice,
     omiStreamer,
-    startAudioListener,
+    startOmiAudio,
     onSessionStart,
     onSessionEnd,
   ]);
@@ -573,7 +626,8 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       if (selectedSource.type === 'microphone') {
         await phoneStreaming.stopStreaming();
       } else {
-        await stopAudioListener();
+        omiAudioHandlerRef.current = null; // no BLE auto-reconnect after a user stop
+        await stopOmiAudio();
         omiStreamer.stopStreaming();
         omiLiveActivity.stopActivity();
       }
@@ -593,7 +647,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         currentSessionIdRef.current = null;
       }
     }
-  }, [selectedSource, phoneStreaming, stopAudioListener, omiStreamer, omiLiveActivity, onSessionEnd]);
+  }, [selectedSource, phoneStreaming, stopOmiAudio, omiStreamer, omiLiveActivity, onSessionEnd]);
 
   // Toggle streaming
   const handleStreamingPress = useCallback(async () => {
@@ -631,7 +685,18 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
   }, [selectedSource]);
 
   // Handle UNode found
-  const handleUnodeFound = useCallback(async (apiUrl: string, streamUrl: string, token?: string, chronicleApiUrl?: string, hostname?: string) => {
+  // Login prompt waiting for the discovery modal to finish closing. iOS cannot present
+  // the login modal while another modal is dismissing; trying leaves an invisible
+  // overlay that swallows every tap on the home screen.
+  const pendingAuthRef = useRef<{ apiUrl: string; hostname?: string } | null>(null);
+
+  const firePendingAuth = useCallback(() => {
+    const pending = pendingAuthRef.current;
+    pendingAuthRef.current = null;
+    if (pending && onAuthRequired) onAuthRequired(pending);
+  }, [onAuthRequired]);
+
+  const handleUnodeFound = useCallback(async (apiUrl: string, streamUrl: string, chronicleApiUrl?: string, hostname?: string) => {
     const name = new URL(apiUrl).hostname.split('.')[0] || 'UNode';
     const savedUnode = await saveUnode({
       name,
@@ -640,25 +705,21 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
       chronicleApiUrl,
       streamUrl,
       tailscaleIp: new URL(apiUrl).hostname,
-      authToken: token,
     });
 
-    // Save token globally so other pages can use it
-    if (token) {
-      await saveAuthToken(token);
-    }
+    // A token from another server is useless here; sign in fresh via Casdoor.
+    await clearAuthToken();
 
     const updatedUnodes = await getUnodes();
     setUnodes(updatedUnodes);
     setSelectedUnodeId(savedUnode.id);
     await setActiveUnodeStorage(savedUnode.id);
-    setShowUnodeDiscovery(false);
 
-    // If not authenticated, immediately prompt login with the new unode's connection details
-    if (!authToken && onAuthRequired) {
-      onAuthRequired({ apiUrl, hostname });
-    }
-  }, [authToken, onAuthRequired]);
+    pendingAuthRef.current = { apiUrl, hostname };
+    setShowUnodeDiscovery(false);
+    // Android has no Modal onDismiss, so prompt straight away there.
+    if (Platform.OS !== 'ios') firePendingAuth();
+  }, [firePendingAuth]);
 
   // Handle UNode removed
   const handleRemoveUnode = useCallback(async (unodeId: string) => {
@@ -724,6 +785,9 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
           disabled={isStreaming}
           testID={`${testID}-source`}
         />
+
+        {/* Audio saved on the Omi during Bluetooth gaps: status, opens /omi-storage */}
+        {selectedSource.type === 'omi' && <OmiStorageRow testID={`${testID}-omi-storage`} />}
 
         {/* Streaming Card */}
         <View style={styles.streamingCard}>
@@ -808,6 +872,7 @@ export const UnifiedStreamingPage: React.FC<UnifiedStreamingPageProps> = ({
         animationType="slide"
         presentationStyle="pageSheet"
         onRequestClose={() => setShowUnodeDiscovery(false)}
+        onDismiss={firePendingAuth}
       >
         <SafeAreaView style={styles.modalContainer}>
           <View style={styles.modalHeader}>

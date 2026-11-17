@@ -69,3 +69,8 @@ networks:
   infra-network:
     name: ${INFRA_NETWORK:-infra-network}
     external: true
+
+# Root services: hidden in the catalog unless 'Show root services' is on.
+x-ushadow:
+  casdoor:
+    tags: ["root"]

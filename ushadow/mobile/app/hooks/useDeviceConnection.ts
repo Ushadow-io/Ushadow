@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Alert } from 'react-native';
 import { OmiConnection, BleAudioCodec, OmiDevice } from 'friend-lite-react-native';
 
@@ -19,13 +19,49 @@ interface UseDeviceConnectionOptions {
   onDisconnect?: () => void; // Callback for when disconnection happens
   onConnect?: () => void; // Callback for when connection happens
   onLog?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', message: string, details?: string) => void;
+  /** Asked when the link drops on its own. true = reconnect straight away. */
+  shouldAutoReconnect?: () => boolean;
 }
+
+const RECONNECT_RETRY_MS = [2_000, 5_000, 10_000, 30_000];
 
 export const useDeviceConnection = (
   omiConnection: OmiConnection,
   options?: UseDeviceConnectionOptions
 ): UseDeviceConnection => {
-  const { onDisconnect, onConnect, onLog } = options || {};
+  const { onDisconnect, onConnect, onLog, shouldAutoReconnect } = options || {};
+  const manualDisconnectRef = useRef(false);
+  const reconnectAttemptRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stateChangeRef = useRef<(id: string, state: string) => void>(() => {});
+  const shouldAutoReconnectRef = useRef(shouldAutoReconnect);
+  shouldAutoReconnectRef.current = shouldAutoReconnect;
+
+  useEffect(() => () => {
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+  }, []);
+
+  // Re-issue the connect from inside the disconnect callback, with no timer first.
+  // On iOS a CoreBluetooth connect never times out: it stays pending and completes
+  // when the device is back in range, even while the app is in the background.
+  // A JS timer would not run while iOS has the app suspended. (Same approach as the
+  // Omi app's native BLE manager.)
+  const reconnect = useCallback(async (deviceId: string) => {
+    if (manualDisconnectRef.current || !shouldAutoReconnectRef.current?.()) return;
+    setIsConnecting(true);
+    onLog?.('connecting', 'Reconnecting to OMI device', `Device ID: ${deviceId}`);
+    let ok = false;
+    try {
+      ok = await omiConnection.connect(deviceId, (id, state) => stateChangeRef.current(id, state));
+    } catch (error) {
+      onLog?.('error', 'OMI reconnect failed', String(error));
+    }
+    if (ok) return; // the CONNECTED callback finishes the job
+    setIsConnecting(false);
+    const delay = RECONNECT_RETRY_MS[Math.min(reconnectAttemptRef.current, RECONNECT_RETRY_MS.length - 1)];
+    reconnectAttemptRef.current += 1;
+    reconnectTimerRef.current = setTimeout(() => { void reconnect(deviceId); }, delay);
+  }, [omiConnection, onLog]);
   const [connectedDevice, setConnectedDevice] = useState<OmiDevice | null>(null);
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -39,6 +75,7 @@ export const useDeviceConnection = (
     setIsConnecting(false);
 
     if (isNowConnected) {
+        reconnectAttemptRef.current = 0;
         setConnectedDeviceId(id);
         setConnectionError(null); // Clear any previous error on successful connection
         onLog?.('connected', 'OMI device connected', `Device ID: ${id}`);
@@ -52,8 +89,10 @@ export const useDeviceConnection = (
         setBatteryLevel(-1);
         onLog?.('disconnected', 'OMI device disconnected', `Device ID: ${id}`);
         if (onDisconnect) onDisconnect();
+        void reconnect(id);
     }
-  }, [onDisconnect, onConnect, onLog]);
+  }, [onDisconnect, onConnect, onLog, reconnect]);
+  stateChangeRef.current = handleConnectionStateChange;
 
   const connectToDevice = useCallback(async (deviceId: string) => {
     if (connectedDeviceId && connectedDeviceId !== deviceId) {
@@ -65,6 +104,7 @@ export const useDeviceConnection = (
         return;
     }
 
+    manualDisconnectRef.current = false;
     setIsConnecting(true);
     setConnectionError(null); // Clear previous error
     setConnectedDevice(null); // Clear previous device details
@@ -98,6 +138,9 @@ export const useDeviceConnection = (
 
   const disconnectFromDevice = useCallback(async () => {
     console.log('Attempting to disconnect...');
+    manualDisconnectRef.current = true;
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
     setIsConnecting(false); // No longer attempting to connect if we are disconnecting
     onLog?.('disconnected', 'Disconnecting from OMI device');
     try {

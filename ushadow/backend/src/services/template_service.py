@@ -119,6 +119,7 @@ async def list_templates(source: Optional[str] = None, include_status: bool = Tr
                 service_name=service.service_name,
                 mode="local",
                 tags=service.tags,
+                login_handoff=service.login_handoff,
                 running=is_running,
                 installed=is_installed,
                 needs_setup=needs_setup,

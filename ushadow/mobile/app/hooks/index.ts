@@ -24,7 +24,7 @@ export { useTailscaleDiscovery } from './useTailscaleDiscovery';
 // NOTE: useBluetoothManager is deprecated - use useBluetooth from contexts instead
 // export { useBluetoothManager } from './useBluetoothManager';
 export { useConnectionLog } from './useConnectionLog';
-export { useSessionTracking } from './useSessionTracking';
+export { useSessionTracking, SessionTrackingProvider } from './useSessionTracking';
 
 // App lifecycle hooks
 export { useAppLifecycle } from './useAppLifecycle';

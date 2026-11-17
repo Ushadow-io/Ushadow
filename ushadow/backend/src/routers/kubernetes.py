@@ -451,6 +451,11 @@ async def deploy_service_to_cluster(
                 k8s_spec.ingress["proxyGroup"] = cluster.tailscale_proxy_group or "ushadow-proxies"
             logger.info(f"✓ Auto-generated ingress hostname: {k8s_spec.ingress['host']}")
 
+    # Extra paths on the same ingress that go to other services (e.g. a web UI
+    # whose /api lives on its backend), declared in compose x-ushadow.
+    if k8s_spec.ingress and compose_service and compose_service.k8s_ingress_routes:
+        k8s_spec.ingress.setdefault("routes", compose_service.k8s_ingress_routes)
+
     # Add node selector if node_name specified
     if request.node_name:
         # Add node selector to ensure pod runs on specific node

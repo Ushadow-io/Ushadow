@@ -16,6 +16,7 @@ TAG="${2:-latest}"
 REGISTRY="ghcr.io/ushadow-io"
 PLATFORMS="linux/amd64,linux/arm64"
 BUILDER_NAME="ushadow-builder"
+EXTRA_BUILDX_ARGS=()
 
 # Colors
 RED='\033[0;31m'
@@ -71,6 +72,8 @@ build_and_push() {
     info "---------------------------------------------"
 
     local buildx_args=("--builder" "$BUILDER_NAME" "--platform" "$PLATFORMS" "--tag" "$full_image" "--file" "$dockerfile" "--push")
+    # Optional extras set by the caller: EXTRA_BUILDX_ARGS=(--target x --build-context y=z)
+    buildx_args+=("${EXTRA_BUILDX_ARGS[@]}")
     for arg in "${build_args[@]}"; do
         buildx_args+=("--build-arg" "$arg")
     done
@@ -89,17 +92,19 @@ case "$SERVICE" in
         info "============================================="
         ensure_builder
 
-        # Build backend
+        # Build backend. The k8s chronicle-workers deployment runs this same image.
+        # Upstream Dockerfile + our ushadow-prod stage (bakes in discovery.py and
+        # plugins/, which upstream only bind-mounts in docker-compose).
+        backend_dockerfile="$(mktemp -t chronicle-backend-Dockerfile)"
+        trap 'rm -f "$backend_dockerfile"' EXIT
+        cat "chronicle/backend/Dockerfile" "docker/chronicle-backend/ushadow-stage.Dockerfile" > "$backend_dockerfile"
+        EXTRA_BUILDX_ARGS=(--target ushadow-prod --build-context chronicle_root=chronicle)
         build_and_push \
             "chronicle/backend" \
-            "chronicle/backend/Dockerfile" \
-            "chronicle-backend"
-
-        # Build workers (same Dockerfile as backend, different tag)
-        build_and_push \
-            "chronicle/backend" \
-            "chronicle/backend/Dockerfile" \
-            "chronicle-workers"
+            "$backend_dockerfile" \
+            "chronicle-backend" \
+            "CHRONICLE_BUILD_VERSION=$(git -C chronicle describe --tags --always --dirty)"
+        EXTRA_BUILDX_ARGS=()
 
         # Build webui (upstream dropped its prod Dockerfile; we keep our own).
         # Image name matches what the k8s chronicle-webui deployment pulls.
@@ -110,8 +115,7 @@ case "$SERVICE" in
 
         info "============================================="
         info "Chronicle images pushed successfully!"
-        info "  ${REGISTRY}/chronicle-backend:${TAG}"
-        info "  ${REGISTRY}/chronicle-workers:${TAG}"
+        info "  ${REGISTRY}/chronicle-backend:${TAG} (backend + workers)"
         info "  ${REGISTRY}/chronicle/webui:${TAG}"
         info "============================================="
         ;;
@@ -202,7 +206,7 @@ case "$SERVICE" in
         echo ""
         echo "Available services:"
         echo "  ushadow     - Build ushadow backend + frontend"
-        echo "  chronicle   - Build Chronicle backend + workers + webui"
+        echo "  chronicle   - Build Chronicle backend (also runs workers) + webui"
         echo "  mycelia     - Build Mycelia backend + frontend + python-worker"
         echo "  openmemory  - Build OpenMemory server"
         echo ""

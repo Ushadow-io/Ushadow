@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Lock, KeyRound, Link, Pencil } from 'lucide-react'
 import { Select, ComboboxItem } from '@mantine/core'
 import { EnvVarInfo, EnvVarConfig } from '../services/api'
@@ -31,6 +31,10 @@ export default function EnvVarEditor({ envVar, config, onChange, mode = 'deploy'
   const [editing, setEditing] = useState(false)
   const isMapped = !!config.setting_path
   const [showMapping, setShowMapping] = useState(isMapped)
+  // Follow mapping changes made outside this row (e.g. a picker filling a literal value).
+  useEffect(() => {
+    setShowMapping(isMapped)
+  }, [isMapped])
 
   const isSecret = envVar.is_secret ?? false
   const isLocked = config.locked || envVar.locked || false

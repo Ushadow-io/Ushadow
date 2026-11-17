@@ -66,6 +66,7 @@ module.exports = {
       './plugins/withAndroidManifestFix.js',
       './plugins/withAndroidGradleFix.js',
       './plugins/withNowPlayingModule.js',
+      './plugins/withFmtCxx17.js',
       '@bacons/apple-targets',
       'expo-router',
       '@react-native-voice/voice',

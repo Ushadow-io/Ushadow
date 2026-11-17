@@ -20,3 +20,8 @@ services:
     environment:
       # Tell backend that Tailscale socket is available
       - TAILSCALE_SOCKET_AVAILABLE=true
+
+# Root services: hidden in the catalog unless 'Show root services' is on.
+x-ushadow:
+  backend:
+    tags: ["root"]

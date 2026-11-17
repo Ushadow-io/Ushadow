@@ -8,6 +8,7 @@
         svc-list svc-restart svc-start svc-stop svc-status \
         chronicle-env-export chronicle-build-local chronicle-up-local chronicle-down-local chronicle-dev \
         ushadow-push ushadow-push-local chronicle-push mycelia-push openmemory-push \
+        chronicle-push-local chronicle-redeploy-k8s chronicle-deploy-local ushadow-deploy-k8s \
         release env-sync env-sync-apply env-info \
         \
         infra-up infra-down infra-logs
@@ -259,21 +260,40 @@ ushadow-push-local:
 chronicle-push:
 	@./scripts/build-push-images.sh chronicle $(TAG)
 
+# Chronicle - build the committed chronicle/ HEAD for the local K8s registry
+# (K8S_REGISTRY, default anubis:32000). Pushes :latest and :<branch>-<sha>.
 chronicle-push-local:
-	@if [ -z "$(K8S_REGISTRY)" ]; then \
-		echo "❌ Error: K8S_REGISTRY not set"; \
-		echo ""; \
-		echo "Usage: K8S_REGISTRY=anubis:32000 make chronicle-push-local"; \
-		exit 1; \
-	fi
-	@echo "🏗️  Building chronicle-backend for $(K8S_REGISTRY) (amd64)..."
-	@docker build --platform linux/amd64 -t $(K8S_REGISTRY)/chronicle-backend:latest -f chronicle/backend/Dockerfile chronicle/backend
-	@echo "📤 Pushing to $(K8S_REGISTRY)..."
-	@docker push $(K8S_REGISTRY)/chronicle-backend:latest
-	@echo "✅ Pushed $(K8S_REGISTRY)/chronicle-backend:latest"
-	@echo ""
-	@echo "To update K8s deployments:"
-	@echo "  kubectl rollout restart deployment/chronicle-backend deployment/chronicle-workers -n ushadow"
+	@K8S_REGISTRY=$(or $(K8S_REGISTRY),anubis:32000) ./scripts/chronicle-push-local.sh
+
+# Chronicle - restart backend + workers so they pull the new :latest
+# (CHRONICLE_BACKEND_IMAGE in k8s/configmap.yaml; pull policy Always).
+chronicle-redeploy-k8s:
+	@kubectl --context $(or $(K8S_CONTEXT),microk8s) -n $(or $(K8S_NAMESPACE),ushadow) \
+		rollout restart deployment/chronicle-backend deployment/chronicle-workers
+	@kubectl --context $(or $(K8S_CONTEXT),microk8s) -n $(or $(K8S_NAMESPACE),ushadow) \
+		rollout status deployment/chronicle-backend --timeout=300s
+	@kubectl --context $(or $(K8S_CONTEXT),microk8s) -n $(or $(K8S_NAMESPACE),ushadow) \
+		rollout status deployment/chronicle-workers --timeout=300s
+
+# Chronicle - build the committed chronicle/ HEAD web UI for the local K8s registry
+# (K8S_REGISTRY, default anubis:32000). Pushes :latest and :<branch>-<sha>.
+chronicle-webui-push-local:
+	@K8S_REGISTRY=$(or $(K8S_REGISTRY),anubis:32000) ./scripts/chronicle-webui-push-local.sh
+
+# Chronicle - restart the web UI so it pulls the new :latest
+# (CHRONICLE_WEBUI_IMAGE in k8s/configmap.yaml; pull policy Always).
+chronicle-webui-redeploy-k8s:
+	@kubectl --context $(or $(K8S_CONTEXT),microk8s) -n $(or $(K8S_NAMESPACE),ushadow) \
+		rollout restart deployment/chronicle-webui
+	@kubectl --context $(or $(K8S_CONTEXT),microk8s) -n $(or $(K8S_NAMESPACE),ushadow) \
+		rollout status deployment/chronicle-webui --timeout=300s
+
+# ushadow - build and deploy backend + frontend + k8s/ manifests with Skaffold
+ushadow-deploy-k8s:
+	@skaffold run --kube-context $(or $(K8S_CONTEXT),microk8s)
+
+# Chronicle - build, push and roll out in one step
+chronicle-deploy-local: chronicle-push-local chronicle-redeploy-k8s
 
 # Mycelia - Build and push backend
 mycelia-push:

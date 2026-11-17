@@ -73,6 +73,7 @@ class ServiceSummary:
     required_env_count: int = 0
     optional_env_count: int = 0
     wizard: Optional[str] = None  # ID of setup wizard if available
+    tags: list[str] = field(default_factory=list)  # x-ushadow tags; "root" = core platform service
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -93,6 +94,7 @@ class ServiceSummary:
             "required_env_count": self.required_env_count,
             "optional_env_count": self.optional_env_count,
             "wizard": self.wizard,
+            "tags": self.tags,
         }
 
 
@@ -983,6 +985,7 @@ class ServiceOrchestrator:
             required_env_count=len(service.required_env_vars),
             optional_env_count=len(service.optional_env_vars),
             wizard=service.wizard,
+            tags=service.tags,
         )
 
     async def _check_needs_setup(self, service: DiscoveredService) -> bool:

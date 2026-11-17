@@ -9,3 +9,8 @@ data:
   CASDOOR_EXTERNAL_URL: "https://door.spangled-kettle.ts.net"
   USHADOW_PUBLIC_URL: "https://ush.spangled-kettle.ts.net"
   APP_PUBLIC_URL: "https://ush.spangled-kettle.ts.net"
+  # Image Ushadow deploys for chronicle-backend + chronicle-workers
+  # (compose/chronicle-compose.yaml). Built by `make chronicle-push-local`.
+  CHRONICLE_BACKEND_IMAGE: "anubis:32000/chronicle-backend:latest"
+  # Image Ushadow deploys for chronicle-webui. Built by `make chronicle-webui-push-local`.
+  CHRONICLE_WEBUI_IMAGE: "anubis:32000/chronicle-webui:latest"

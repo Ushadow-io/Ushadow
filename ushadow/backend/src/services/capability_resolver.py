@@ -21,6 +21,19 @@ from src.utils.logging import get_logger
 logger = get_logger(__name__, prefix="Resolve")
 
 
+def _uses_for(service) -> list[dict]:
+    """The 'uses' entries for a compose service: its required, then its optional capabilities."""
+    return [
+        {
+            'capability': cap,
+            'required': required,
+            'env_mapping': service.capability_env_mappings.get(cap, {}),
+        }
+        for caps, required in ((service.requires, True), (service.optional or [], False))
+        for cap in caps
+    ]
+
+
 class CapabilityResolver:
     """
     Resolves capability requirements to concrete environment variables.
@@ -340,19 +353,16 @@ class CapabilityResolver:
         env: Dict[str, str] = {}
         errors: List[str] = []
 
-        # Resolve each required capability using wiring
-        for capability in compose_service.requires:
+        # Resolve each required and optional capability using wiring
+        for use in _uses_for(compose_service):
             try:
-                # Create a minimal "use" dict for _resolve_capability
-                use = {
-                    'capability': capability,
-                    'required': True,
-                    'env_mapping': compose_service.capability_env_mappings.get(capability, {}),
-                }
                 capability_env = await self._resolve_capability(use, service_id)
                 env.update(capability_env)
             except ValueError as e:
-                errors.append(str(e))
+                if use['required']:
+                    errors.append(str(e))
+                else:
+                    logger.info(f"Optional capability skipped for '{service_id}': {e}")
 
         if errors:
             logger.warning(
@@ -758,17 +768,8 @@ class CapabilityResolver:
 
         # Convert requires list to uses format, including capability_env_mappings
         # capability_env_mappings: {capability -> {canonical_key -> service_env_var}}
-        uses = [
-            {
-                'capability': cap,
-                'required': True,
-                'env_mapping': service.capability_env_mappings.get(cap, {}),
-            }
-            for cap in service.requires
-        ]
-
         config = {
-            'uses': uses,
+            'uses': _uses_for(service),
             'service_name': service.service_name,
             'compose_file': str(service.compose_file),
         }

@@ -9,6 +9,7 @@ import DeployModal from '../components/DeployModal'
 import DNSManagementPanel from '../components/kubernetes/DNSManagementPanel'
 import InfrastructureOverridesEditor from '../components/InfrastructureOverridesEditor'
 import ClusterNodeList from '../components/kubernetes/ClusterNodeList'
+import ClusterIngressSettings from '../components/kubernetes/ClusterIngressSettings'
 
 interface InfraService {
   found: boolean
@@ -98,9 +99,6 @@ export default function KubernetesClustersPage() {
   const [error, setError] = useState<string | null>(null)
 
   // Ingress configuration editing
-  const [editingCluster, setEditingCluster] = useState<string | null>(null)
-  const [ingressDomain, setIngressDomain] = useState('')
-  const [ingressEnabledByDefault, setIngressEnabledByDefault] = useState(false)
 
   useEffect(() => {
     loadClusters()
@@ -527,106 +525,7 @@ export default function KubernetesClustersPage() {
                   </div>
                 )}
 
-                {/* Ingress Configuration */}
-                <div className="mt-4 pt-4 border-t border-neutral-200 dark:border-neutral-700">
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                      Ingress Configuration
-                    </h4>
-                    {editingCluster !== cluster.cluster_id && (
-                      <button
-                        onClick={() => {
-                          setEditingCluster(cluster.cluster_id)
-                          setIngressDomain(cluster.ingress_domain || '')
-                          setIngressEnabledByDefault(cluster.ingress_enabled_by_default || false)
-                        }}
-                        className="text-xs text-primary-600 hover:underline"
-                        data-testid={`edit-ingress-${cluster.cluster_id}`}
-                      >
-                        Configure
-                      </button>
-                    )}
-                  </div>
-
-                  {editingCluster === cluster.cluster_id ? (
-                    <div className="space-y-3 p-3 bg-neutral-50 dark:bg-neutral-800/50 rounded">
-                      <div>
-                        <label className="block text-xs text-neutral-600 dark:text-neutral-400 mb-1">
-                          Ingress Domain (e.g., "shadow" for *.shadow)
-                        </label>
-                        <input
-                          type="text"
-                          value={ingressDomain}
-                          onChange={(e) => {
-                            const value = e.target.value.toLowerCase()
-                            if (/^[a-z0-9.-]*$/.test(value)) {
-                              setIngressDomain(value)
-                            }
-                          }}
-                          placeholder="shadow"
-                          className="w-full px-3 py-2 text-sm rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100"
-                          data-testid={`ingress-domain-input-${cluster.cluster_id}`}
-                        />
-                      </div>
-
-                      <label className="flex items-center space-x-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={ingressEnabledByDefault}
-                          onChange={(e) => setIngressEnabledByDefault(e.target.checked)}
-                          className="rounded"
-                          data-testid={`ingress-default-checkbox-${cluster.cluster_id}`}
-                        />
-                        <span className="text-neutral-700 dark:text-neutral-300">Enable ingress by default for new deployments</span>
-                      </label>
-
-                      <div className="flex justify-end space-x-2">
-                        <button
-                          onClick={() => setEditingCluster(null)}
-                          className="px-3 py-1 text-sm text-neutral-600 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          onClick={async () => {
-                            try {
-                              await kubernetesApi.updateCluster(cluster.cluster_id, {
-                                ingress_domain: ingressDomain || undefined,
-                                ingress_enabled_by_default: ingressEnabledByDefault,
-                                tailscale_magicdns_enabled: !!ingressDomain
-                              })
-                              setEditingCluster(null)
-                              await loadClusters()
-                            } catch (err: any) {
-                              alert(`Failed to update cluster: ${err.message}`)
-                            }
-                          }}
-                          className="btn-primary px-3 py-1 text-sm"
-                          data-testid={`save-ingress-${cluster.cluster_id}`}
-                        >
-                          Save
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="text-sm">
-                      {cluster.ingress_domain ? (
-                        <div className="space-y-1">
-                          <div className="text-neutral-600 dark:text-neutral-400">
-                            Domain: <code className="px-1 bg-neutral-100 dark:bg-neutral-700 rounded">.{cluster.ingress_domain}</code>
-                          </div>
-                          <div className="text-neutral-600 dark:text-neutral-400">
-                            Auto-enable: {cluster.ingress_enabled_by_default ? '✓ Yes' : '✗ No'}
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="text-neutral-500 dark:text-neutral-400 text-xs">
-                          Not configured
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
+                <ClusterIngressSettings cluster={cluster} onSaved={loadClusters} />
 
                 {/* Nodes */}
                 <ClusterNodeList

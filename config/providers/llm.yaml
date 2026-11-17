@@ -125,6 +125,18 @@ providers:
         env_var: OPENAI_MODEL
         label: "Model Name"
         required: true
+      thinking:
+        env_var: LLM_THINKING
+        label: "Thinking model"
+        description: "true for models that think before they answer (Qwen3, Gemma). Chronicle then turns thinking off or on per task."
+        required: false
+        default: "false"
+      context_window:
+        env_var: LLM_CONTEXT_WINDOW
+        label: "Context size (tokens)"
+        description: "The context the server loaded the model with (llama.cpp n_ctx). Chronicle's agents compact their history to stay under it."
+        required: false
+        default: "32768"
 
     ui:
       icon: server

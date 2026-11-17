@@ -16,11 +16,19 @@ x-ushadow:
     display_name: "Chronicle api"
     description: "AI-powered voice journal and life logger with transcription and LLM analysis"
     requires: [llm, transcription]
-    optional: [memory]  # Uses memory if available, works without it
-    # Pod label so the chakra-3eye NetworkPolicy 'allow-mem0-api-from-labeled'
-    # admits memory reads/writes to mem0-api.
+    optional: [memory, speaker_recognition]  # Uses them if available, works without them
+    # The selected LLM goes only to LLM_*; Chronicle's chat model reads those.
+    # OPENAI_* stay on OpenAI for embeddings and the fallback LLM.
+    capability_env_mappings:
+      llm:
+        api_key: LLM_API_KEY
+        base_url: LLM_BASE_URL
+        model: LLM_MODEL
+    # Pod labels for NetworkPolicies: chakra-3eye 'allow-mem0-api-from-labeled'
+    # admits mem0-api; chakra-sacral 'gpu-coordinator' admits the GPU LLM.
     k8s_pod_labels:
       access-mem0: "true"
+      access-gpu: "true"
     tags: ["voice", "journal", "ai", "transcription", "conversation", "audio"]
     # route_path: /chronicle  # Tailscale Serve route - all /chronicle/* requests go here
     exposes:
@@ -45,10 +53,17 @@ x-ushadow:
     display_name: "Chronicle Workers"
     description: "Background workers for Chronicle (transcription, memory, audio processing)"
     requires: [llm, transcription]
+    optional: [speaker_recognition]
+    capability_env_mappings:
+      llm:
+        api_key: LLM_API_KEY
+        base_url: LLM_BASE_URL
+        model: LLM_MODEL
     # The 'memory' RQ queue writes extracted memories to mem0-api in chakra-3eye;
-    # this label is required by that namespace's NetworkPolicy.
+    # the timeline and memory agents call the GPU LLM in chakra-sacral.
     k8s_pod_labels:
       access-mem0: "true"
+      access-gpu: "true"
     k8s_resources:
       limits:
         cpu: "2000m"
@@ -60,10 +75,23 @@ x-ushadow:
     display_name: "Chronicle Web UI"
     description: "Web interface for Chronicle voice journal"
     requires: []
+    # Open the web UI already signed in: Ushadow mints a token for this audience
+    # and passes it as #token=; the web UI exchanges it for a session.
+    login_handoff: chronicle
+    # The web UI calls its own origin for the API, so its ingress sends the
+    # backend paths to chronicle-backend (the split Chronicle's Caddyfile does).
+    k8s_ingress_routes:
+      - { path: /api, service: chronicle-backend, port: 8000 }
+      - { path: /auth, service: chronicle-backend, port: 8000 }
+      - { path: /users, service: chronicle-backend, port: 8000 }
+      - { path: /ws, service: chronicle-backend, port: 8000 }
+      - { path: /health, service: chronicle-backend, port: 8000 }
+      - { path: /readiness, service: chronicle-backend, port: 8000 }
+      - { path: /audio, service: chronicle-backend, port: 8000 }
 
 services:
   chronicle-backend:
-    image: ghcr.io/ushadow-io/chronicle-backend:latest
+    image: ${CHRONICLE_BACKEND_IMAGE:-ghcr.io/ushadow-io/chronicle-backend:latest}
     build:
       context: ../chronicle/backend
       dockerfile: Dockerfile
@@ -94,8 +122,10 @@ services:
       # Transcription capability (from selected provider)
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
       - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER:-deepgram}
+      # Speaker recognition (optional). Empty = Chronicle skips speaker identification.
+      - SPEAKER_SERVICE_URL=${SPEAKER_SERVICE_URL:-}
       # Memory capability (optional, from selected provider)
-      - MEMORY_PROVIDER=${MEMORY_PROVIDER:-openmemory_mcp}
+      - MEMORY_PROVIDER=${MEMORY_PROVIDER:-chronicle}
       - MEMORY_SERVER_URL=${MEMORY_SERVER_URL:-}
       - OPENMEMORY_USER_ID=${ADMIN_EMAIL:-admin@example.com}
 
@@ -142,14 +172,14 @@ services:
           memory: 2G
 
   chronicle-workers:
-    image: ghcr.io/ushadow-io/chronicle-backend:latest
+    image: ${CHRONICLE_BACKEND_IMAGE:-ghcr.io/ushadow-io/chronicle-backend:latest}
     build:
       context: ../chronicle/backend
       dockerfile: Dockerfile
       target: prod
     pull_policy: build  # Build from source if context exists, otherwise pull from GHCR
     container_name: ${COMPOSE_PROJECT_NAME:-ushadow}-chronicle-workers
-    command: ["uv", "run", "python", "worker_orchestrator.py"]
+    command: ["python", "worker_orchestrator.py"]
     environment:
       # Infrastructure connections
       - AUTH_SECRET_KEY=${AUTH_SECRET_KEY}
@@ -175,8 +205,10 @@ services:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
       # - PARAKEET_ASR_URL=${PARAKEET_ASR_URL}
       - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER:-deepgram}
+      # Speaker recognition (optional). Empty = Chronicle skips speaker identification.
+      - SPEAKER_SERVICE_URL=${SPEAKER_SERVICE_URL:-}
            # Memory capability (optional, from selected provider)
-      - MEMORY_PROVIDER=${MEMORY_PROVIDER:-openmemory_mcp}
+      - MEMORY_PROVIDER=${MEMORY_PROVIDER:-chronicle}
       - MEMORY_SERVER_URL=${MEMORY_SERVER_URL:-}
       - OPENMEMORY_USER_ID=${ADMIN_EMAIL:-admin@example.com}
 
@@ -201,7 +233,7 @@ services:
     restart: unless-stopped
 
   chronicle-webui:
-    image: ghcr.io/ushadow-io/chronicle/webui:latest
+    image: ${CHRONICLE_WEBUI_IMAGE:-ghcr.io/ushadow-io/chronicle/webui:latest}
     build:
       context: ../chronicle
       dockerfile: ../docker/chronicle-webui/Dockerfile

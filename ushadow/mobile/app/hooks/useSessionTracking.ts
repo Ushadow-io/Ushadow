@@ -29,7 +29,23 @@ interface UseSessionTrackingReturn {
   isLoading: boolean;
 }
 
+const SessionTrackingContext = React.createContext<UseSessionTrackingReturn | null>(null);
+
+/**
+ * One shared session store for the whole app. Without it, each screen that
+ * called the hook got its own copy: the home screen counted bytes, but the
+ * Sessions tab kept the snapshot it loaded when it first opened (0 KB).
+ */
+export const SessionTrackingProvider = ({ children }: { children: React.ReactNode }) =>
+  React.createElement(SessionTrackingContext.Provider, { value: useSessionTrackingState() }, children);
+
 export const useSessionTracking = (): UseSessionTrackingReturn => {
+  const ctx = React.useContext(SessionTrackingContext);
+  if (!ctx) throw new Error('useSessionTracking must be used inside SessionTrackingProvider');
+  return ctx;
+};
+
+const useSessionTrackingState = (): UseSessionTrackingReturn => {
   const [sessions, setSessions] = useState<StreamingSession[]>([]);
   const [activeSession, setActiveSession] = useState<StreamingSession | null>(null);
   const [isLoading, setIsLoading] = useState(true);

@@ -132,6 +132,8 @@ class DiscoveredService:
     setup_script: Optional[str] = None  # Script to run on install (relative to compose file dir)
     k8s_resources: Optional[Dict[str, Any]] = None  # K8s resource limits/requests override
     k8s_pod_labels: dict[str, str] | None = None  # Extra pod-template labels (NetworkPolicy targeting)
+    k8s_ingress_routes: list[dict[str, Any]] | None = None  # Extra ingress paths to other services
+    login_handoff: str | None = None  # Token audience for sign-in handoff
 
     # YAML provider this compose service implements (links to provider registry)
     provider_id: Optional[str] = None
@@ -310,6 +312,8 @@ class ComposeServiceRegistry:
                 setup_script=service.setup_script,
                 k8s_resources=service.k8s_resources,
                 k8s_pod_labels=service.k8s_pod_labels,
+                k8s_ingress_routes=service.k8s_ingress_routes,
+                login_handoff=service.login_handoff,
                 exposes=service.exposes,
                 tags=service.tags,
                 environments=service.environments,

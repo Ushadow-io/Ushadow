@@ -354,6 +354,37 @@ export async function verifyUnodeAuth(
 }
 
 /**
+ * Upload a recorded audio file for full processing (transcript + memories).
+ * `capturedAt` is when the first sample was recorded; omit it if unknown.
+ * React Native reads the file from `fileUri` natively, so large files never pass through JS.
+ */
+export async function uploadAudioFile(
+  fileUri: string,
+  fileName: string,
+  options: { deviceName: string; capturedAt?: Date; mimeType?: string },
+): Promise<void> {
+  const [chronicleApiUrl, token] = await Promise.all([getChronicleApiUrl(), getToken()]);
+  if (!token) throw new Error('Not authenticated. Please log in first.');
+
+  const query = new URLSearchParams({ device_name: options.deviceName });
+  if (options.capturedAt) query.set('captured_at', options.capturedAt.toISOString());
+
+  const form = new FormData();
+  // RN FormData file part: { uri, name, type }.
+  form.append('files', { uri: fileUri, name: fileName, type: options.mimeType ?? 'audio/ogg' } as any);
+
+  const response = await fetch(`${chronicleApiUrl}/api/audio/upload?${query}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  if (!response.ok) {
+    const detail = (await response.text()).slice(0, 200);
+    throw new Error(`Upload failed: ${response.status} ${detail}`);
+  }
+}
+
+/**
  * Get audio URL for playback.
  *
  * IMPORTANT: Audio playback uses the proxy with token in query string.

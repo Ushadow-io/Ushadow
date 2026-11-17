@@ -1,0 +1,29 @@
+# Speaker Recognition Capability Providers
+# Implements the 'speaker_recognition' capability defined in capabilities.yaml
+#
+# Settings are stored at: speaker_recognition.{provider_id}.{key}
+# e.g. speaker_recognition.pyannote.server_url
+
+capability: speaker_recognition
+
+providers:
+  # ==========================================================================
+  # PyAnnote speaker recognition (compose/speaker-recognition-compose.yaml)
+  # ==========================================================================
+  - id: pyannote
+    name: "Speaker Recognition (PyAnnote)"
+    description: "Self-hosted speaker diarization and identification"
+    mode: local
+
+    credentials:
+      server_url:
+        env_var: SPEAKER_SERVICE_URL
+        label: "Speaker Recognition URL"
+        description: "In k8s: http://speaker-recognition.ushadow.svc.cluster.local:8085"
+        type: url
+        default: "http://speaker-recognition:8085"
+        required: true
+
+    ui:
+      icon: users
+      tags: ["speaker-id", "diarization", "local", "private"]

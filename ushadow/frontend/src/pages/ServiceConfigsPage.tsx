@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation } from 'react-router-dom'
+import { SettingField } from '../components/settings/SettingField'
 import {
   Plus,
   RefreshCw,
@@ -34,6 +35,7 @@ import {
 import {
   useServiceConfigData,
   useServiceCatalog,
+  useRootServiceFilter,
   useDeploymentActions,
   useWiringActions,
 } from '../hooks'
@@ -101,6 +103,7 @@ export default function ServiceConfigsPage() {
 
   // Service catalog hook
   const catalog = useServiceCatalog()
+  const rootFilter = useRootServiceFilter(catalog.services)
 
   // Deployment actions hook
   const deploymentActions = useDeploymentActions()
@@ -2063,7 +2066,18 @@ export default function ServiceConfigsPage() {
           </div>
         ) : (
           <div className="space-y-3">
-            {catalog.services.map(service => (
+            {rootFilter.rootCount > 0 && (
+              <SettingField
+                id="catalog-show-root-services"
+                name="showRootServices"
+                type="toggle"
+                label={`Show root services (${rootFilter.rootCount})`}
+                description="Core platform and shared infrastructure. Usually already running."
+                value={rootFilter.showRoot}
+                onChange={(v) => rootFilter.setShowRoot(Boolean(v))}
+              />
+            )}
+            {rootFilter.visible.map(service => (
               <div
                 key={service.service_id}
                 data-testid={`catalog-item-${service.service_name}`}
