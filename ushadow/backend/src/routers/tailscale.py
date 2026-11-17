@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Literal, Any
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
-from src.services.auth import get_current_user, generate_jwt_for_service
+from src.services.auth import get_current_user
 from src.models.user import User
 from src.config import get_settings
 from src.utils.tailscale_serve import get_tailscale_status, _get_docker_client
@@ -153,7 +153,6 @@ class MobileConnectionQR(BaseModel):
     tailscale_ip: str
     api_port: int
     api_url: str  # Full URL to leader info endpoint
-    auth_token: str  # JWT token for authenticating with ushadow and chronicle  # Full URL to leader info endpoint
 
 
 # ============================================================================
@@ -733,23 +732,15 @@ async def get_mobile_connection_qr(
             logger.warning(f"[Mobile-QR] Failed to auto-register mobile URIs: {e}")
             # Non-fatal - continue with QR generation
 
-        # Generate auth token for mobile app (valid for ushadow and chronicle)
-        # Both services now share the same database (ushadow-blue) so user IDs match
-        auth_token = generate_jwt_for_service(
-            user_id=str(current_user.id),
-            user_email=current_user.email,
-            audiences=["ushadow", "chronicle"]
-        )
-
         # ── Build QR payload ─────────────────────────────────────────────────
+        # No token in the QR: the app signs in through Casdoor after scanning.
         connection_data = {
             "type": "ushadow-connect",
-            "v": 4,
+            "v": 5,
             "hostname": hostname,
             "ip": ip_address,
             "port": api_port,
             "api_url": api_url,
-            "auth_token": auth_token,
             "envname": envname,
         }
 
@@ -769,7 +760,6 @@ async def get_mobile_connection_qr(
             tailscale_ip=ip_address,
             api_port=api_port,
             api_url=api_url,
-            auth_token=auth_token,
         )
 
     except HTTPException:

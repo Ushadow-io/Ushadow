@@ -27,7 +27,7 @@ from fastapi import WebSocket
 from google.protobuf import json_format
 from google.protobuf.message import DecodeError
 
-from ..auth import generate_jwt_for_service, get_user_from_token
+from ..auth import generate_compact_jwt_for_service, generate_jwt_for_service, get_user_from_token
 from . import audio_pb2
 
 # Returns the destination URLs the server itself exposes (scheme://host:port/path).
@@ -107,8 +107,10 @@ async def _bridged_hello(text: str) -> tuple[str, str]:
     user = await get_user_from_token(message.hello.bearer_token)
     if not user:
         raise RelayRefusedError(1008, "invalid or expired token")
+    # Full token for the Wyoming fan-out (Mycelia reads principal/policies);
+    # compact token in the hello, because audio v2 caps bearer_token at 255 chars.
     token = generate_jwt_for_service(str(user.id), user.email, audiences=_AUDIENCES)
-    message.hello.bearer_token = token
+    message.hello.bearer_token = generate_compact_jwt_for_service(str(user.id), audiences=_AUDIENCES)
     rendered = json_format.MessageToJson(message, preserving_proto_field_name=True, indent=None)
     return rendered, token
 

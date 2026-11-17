@@ -212,3 +212,17 @@ def generate_jwt_for_service(user_id: str, user_email: str, audiences: list[str]
         "policies": [{"resource": "**", "action": "*", "effect": "allow"}],
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def generate_compact_jwt_for_service(user_id: str, audiences: list[str]) -> str:
+    """A service JWT with only the claims a fastapi-users service reads (sub, aud, exp).
+
+    For carriers with a size limit, such as the Chronicle audio-v2 ClientHello,
+    which caps bearer_token at 255 characters; the full service token is ~400.
+    """
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": user_id, "iss": "ushadow", "aud": audiences,
+        "exp": now + timedelta(seconds=JWT_LIFETIME_SECONDS), "iat": now,
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
