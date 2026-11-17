@@ -14,6 +14,10 @@ from ledger.read_models import (
     ContextRequest,
     CorrectRequest,
     ForgetRequest,
+    KnownEntitiesAnswer,
+    KnownEntity,
+    KnownEntityRemove,
+    KnownEntityRequest,
     Refusal,
     RefusalCode,
     ResolveAnswer,
@@ -95,3 +99,22 @@ async def correct(req: CorrectRequest, p: Caller, s: Svc) -> Any:
 async def forget(req: ForgetRequest, p: Caller, s: Svc) -> Any:
     """Forget facts or an entity in memory; memory blocks them from being made again."""
     return _out(await s.read.write(p, req))
+
+
+@router.get("/known-entities", response_model=KnownEntitiesAnswer)
+async def known_entities(p: Caller, s: Svc, userId: str = Query(min_length=1)) -> Any:  # noqa: N803
+    """The owner's word list: names (people, projects, products) with their other names."""
+    return _out(await s.read.known_entities(p, userId))
+
+
+@router.post("/known-entities", response_model=KnownEntity)
+async def name_entity(req: KnownEntityRequest, p: Caller, s: Svc) -> Any:
+    """A human decision: this name and its other names are ONE entity. Replaces an entry of
+    the same name. Memory keeps it across rebuilds."""
+    return _out(await s.read.name_entity(p, req))
+
+
+@router.post("/known-entities/remove")
+async def unname_entity(req: KnownEntityRemove, p: Caller, s: Svc) -> Any:
+    """Take an entry off the word list (entities already merged stay merged)."""
+    return _out(await s.read.unname_entity(p, req))

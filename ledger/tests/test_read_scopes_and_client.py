@@ -160,3 +160,25 @@ async def test_client_fact_and_decisions_routes():
     bad = _client(lambda r: httpx.Response(200, json={"decisions": [{"no": "id"}]}))
     with pytest.raises(MemoryUnavailable):
         await bad.fact_decisions("u", "mf_1")
+
+
+async def test_client_word_list_routes():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        if request.url.path == "/known-entities/remove":
+            return httpx.Response(404, json={"detail": "no such known entity"})
+        entry = {"id": "dec_1", "name": "Mill One", "aliases": ["millone"], "type": None,
+                 "at": "2026-11-14T09:00:00Z"}
+        if request.method == "GET":
+            return httpx.Response(200, json={"entities": [entry]})
+        return httpx.Response(200, json=entry)
+
+    c = _client(handler)
+    assert [e.name for e in await c.known_entities("u")] == ["Mill One"]
+    made = await c.name_entity({"userId": "u", "name": "Mill One", "aliases": ["millone"]})
+    assert (made.id, made.aliases) == ("dec_1", ["millone"])
+    assert await c.unname_entity("u", "Mill One") is False
+    assert seen == [("GET", "/known-entities"), ("POST", "/known-entities"),
+                    ("POST", "/known-entities/remove")]

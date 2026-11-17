@@ -166,6 +166,21 @@ class WriteAnswer(_Strict):
     effective: Link | None = None
 
 
+class KnownEntity(_Strict):
+    """One entry of the owner's word list: `name` and its other names are ONE entity."""
+
+    id: str
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    type: str | None = None
+    at: datetime | None = None
+
+
+class KnownEntitiesAnswer(_Strict):
+    userId: str
+    entities: list[KnownEntity] = Field(default_factory=list)
+
+
 class RefusalCode(StrEnum):
     forbidden = "forbidden"
     not_found = "not_found"
@@ -303,6 +318,19 @@ class ForgetRequest(_Request):
         if not self.factIds and not self.entityId:
             raise ValueError("give factIds or entityId")
         return self
+
+
+ENTITY_TYPES = ("Person", "Place", "Organization", "Thing", "Topic", "Event", "Other")
+
+
+class KnownEntityRequest(_Request):
+    name: str = Field(min_length=1, max_length=200)
+    aliases: list[str] = Field(default_factory=list, max_length=50)
+    type: Literal[ENTITY_TYPES] | None = None  # type: ignore[valid-type]
+
+
+class KnownEntityRemove(_Request):
+    name: str = Field(min_length=1, max_length=200)
 
 
 ReadRequest = ContextRequest | ResolveRequest | SearchRequest | BriefRequest | TimelineRequest | (

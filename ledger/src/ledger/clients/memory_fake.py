@@ -20,6 +20,7 @@ from ledger.clients.memory import (
     MemoryEntity,
     MemoryFact,
     MemoryFactDecision,
+    MemoryKnownEntity,
     MemoryUnavailable,
 )
 
@@ -38,6 +39,7 @@ class FakeMemoryClient:
         self.suppressed: set[str] = set()
         self.decisions: list[MemoryDecision] = []
         self.fact_decisions_of: dict[str, list[MemoryFactDecision]] = {}
+        self.known: dict[tuple[str, str], MemoryKnownEntity] = {}  # (user, lower name) -> entry
         self.calls: list[str] = []
         self.down = False
         self._ids = itertools.count(1)
@@ -121,6 +123,23 @@ class FakeMemoryClient:
             self.suppressed.add(entity_id)
             decs.append(self._decide("knowledge", "suppress_entity"))
         return decs
+
+    async def known_entities(self, user_id: str) -> list[MemoryKnownEntity]:
+        self._check("known-entities")
+        return sorted((e for (u, _), e in self.known.items() if u == user_id),
+                      key=lambda e: e.name.lower())
+
+    async def name_entity(self, body: dict[str, Any]) -> MemoryKnownEntity:
+        self._check("known-entities")
+        entry = MemoryKnownEntity(id=f"dec_known{next(self._ids)}", name=body["name"].strip(),
+                                  aliases=sorted({a.strip() for a in body.get("aliases") or []
+                                                  if a.strip()}), type=body.get("type"))
+        self.known[(body["userId"], entry.name.lower())] = entry
+        return entry
+
+    async def unname_entity(self, user_id: str, name: str) -> bool:
+        self._check("known-entities")
+        return self.known.pop((user_id, name.strip().lower()), None) is not None
 
 
 def _statement_text(body: dict[str, Any]) -> str | None:

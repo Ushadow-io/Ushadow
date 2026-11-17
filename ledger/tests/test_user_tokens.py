@@ -105,3 +105,44 @@ def test_owner_seam_for_a_user():
     assert owner_for(user, "u1") is None  # internal routes: never
     assert owner_for(Principal(name="user", kind="user"), "me", USER_SCOPE) is None
     assert owner_for(Principal(name="svc"), "me") == "me"  # a service means a user called "me"
+
+
+# ---- the word list (known entities), forwarded to memory -----------------------------------------
+
+
+async def test_a_user_keeps_their_own_word_list(http):
+    entry = {"userId": "me", "name": "Mill One", "aliases": ["millone", " the mill "],
+             "type": "Organization"}
+    made = await http.post("/v1/known-entities", json=entry, headers=token())
+    assert made.status_code == 200
+    assert (made.json()["name"], made.json()["aliases"]) == ("Mill One", ["millone", "the mill"])
+    mine = await http.get("/v1/known-entities", params={"userId": "me"}, headers=token())
+    assert mine.json()["userId"] == USER
+    assert [e["name"] for e in mine.json()["entities"]] == ["Mill One"]
+    other = await http.get("/v1/known-entities", params={"userId": "me"}, headers=token("intruder"))
+    assert other.status_code == 200 and other.json()["entities"] == []
+    gone = {"userId": "me", "name": "Mill One"}
+    assert (await http.post("/v1/known-entities/remove", json=gone,
+                            headers=token("intruder"))).status_code == 404
+    assert (await http.post("/v1/known-entities/remove", json=gone,
+                            headers=token())).json() == {"removed": True}
+    assert (await http.post("/v1/known-entities/remove", json=gone,
+                            headers=token())).status_code == 404
+
+
+async def test_word_list_scopes_for_agents_and_bad_input(http):
+    entry = {"userId": USER, "name": "Mill One"}
+    params = {"userId": USER}
+    assert (await http.get("/v1/known-entities", params=params,
+                           headers=auth("reader"))).status_code == 200
+    assert (await http.post("/v1/known-entities", json=entry,
+                            headers=auth("reader"))).status_code == 403  # read-only
+    assert (await http.get("/v1/known-entities", params=params,
+                           headers=auth("convonly"))).status_code == 403  # no knowledge scope
+    assert (await http.get("/v1/known-entities", params=params,
+                           headers=auth("chronicle"))).status_code == 403  # a service: no scope
+    assert (await http.post("/v1/known-entities", json=entry,
+                            headers=auth("agent"))).status_code == 200
+    assert (await http.post("/v1/known-entities", json={**entry, "type": "Animal"},
+                            headers=auth("agent"))).status_code == 422
+    assert (await http.post("/v1/known-entities", json=entry)).status_code == 401

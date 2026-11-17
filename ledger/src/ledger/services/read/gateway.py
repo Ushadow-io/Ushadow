@@ -17,6 +17,8 @@ from ledger.read_models import (
     ContextRequest,
     CorrectRequest,
     ForgetRequest,
+    KnownEntityRemove,
+    KnownEntityRequest,
     ReadRequest,
     Refusal,
     RefusalCode,
@@ -32,6 +34,7 @@ from ledger.scopes import Principal, Scope, ScopeBook, load_scope_book, owner_fo
 from ledger.services.read import gate
 from ledger.services.read.answers import ReadDeps, ReadHandlers
 from ledger.services.read.brief import BriefHandlers
+from ledger.services.read.known import KnownHandlers
 from ledger.services.read.writes import WriteHandlers
 
 log = logging.getLogger("ledger.read")
@@ -44,6 +47,7 @@ Handler = Callable[[Any], Awaitable[Any]]
 class ReadGateway:
     def __init__(self, deps: ReadDeps, scopes: Callable[[], ScopeBook] = load_scope_book) -> None:
         reads, briefs, self._writes = ReadHandlers(deps), BriefHandlers(deps), WriteHandlers(deps)
+        self._known = KnownHandlers(deps)
         self._scopes = scopes
         self._readers: dict[type, Handler] = {
             ContextRequest: reads.context, ResolveRequest: reads.resolve,
@@ -79,6 +83,33 @@ class ReadGateway:
         answer.withheld += gate.apply(scope, answer)
         answer.after_scope()
         return answer
+
+    def _word_list(self, principal: Principal, user_id: str, write: bool) -> str | Refusal:
+        """The owner a word-list call acts for. The list names people and things: it needs a
+        knowledge scope, and a write scope to change it."""
+        allowed = self.scope_for(principal, user_id)
+        if isinstance(allowed, Refusal):
+            return allowed
+        scope, owner = allowed
+        if not scope.allows_class("knowledge") or (write and not scope.write):
+            return FORBIDDEN
+        return owner
+
+    async def known_entities(self, principal: Principal, user_id: str) -> Any:
+        owner = self._word_list(principal, user_id, write=False)
+        return owner if isinstance(owner, Refusal) else await self._known.list(owner)
+
+    async def name_entity(self, principal: Principal, req: KnownEntityRequest) -> Any:
+        owner = self._word_list(principal, req.userId, write=True)
+        if isinstance(owner, Refusal):
+            return owner
+        return await self._known.add(req.model_copy(update={"userId": owner}))
+
+    async def unname_entity(self, principal: Principal, req: KnownEntityRemove) -> Any:
+        owner = self._word_list(principal, req.userId, write=True)
+        if isinstance(owner, Refusal):
+            return owner
+        return await self._known.remove(req.model_copy(update={"userId": owner}))
 
     async def write(self, principal: Principal, req: WriteRequest) -> WriteAnswer | Refusal:
         allowed = self.scope_for(principal, req.userId)

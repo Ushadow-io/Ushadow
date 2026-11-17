@@ -107,6 +107,16 @@ class MemoryFactDecision(_Loose):
     direction: str | None = None
 
 
+class MemoryKnownEntity(_Loose):
+    """One entry of the word list, as memory shows it."""
+
+    id: str
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    type: str | None = None
+    at: datetime | None = None
+
+
 class FactQuery(BaseModel):
     q: str = Field(min_length=1)
     kinds: list[str] = Field(default_factory=lambda: ["knowledge", "action"])
@@ -132,6 +142,12 @@ class MemoryClient(Protocol):
     async def forget(
         self, user_id: str, fact_ids: list[str], entity_id: str | None
     ) -> list[MemoryDecision]: ...
+
+    async def known_entities(self, user_id: str) -> list[MemoryKnownEntity]: ...
+
+    async def name_entity(self, body: dict[str, Any]) -> MemoryKnownEntity: ...
+
+    async def unname_entity(self, user_id: str, name: str) -> bool: ...
 
 
 def action_fact(raw: dict[str, Any]) -> MemoryFact:
@@ -223,6 +239,23 @@ class HttpMemoryClient:
         body = {"userId": user_id, "factIds": fact_ids, "entityId": entity_id}
         data = await self._json("POST", "/forget", json=body)
         return _decisions(data) if data is not None else []
+
+    async def known_entities(self, user_id: str) -> list[MemoryKnownEntity]:
+        data = await self._json("GET", "/known-entities", params={"userId": user_id})
+        if data is None:
+            raise MemoryUnavailable("memory_bad_response")  # the route must exist
+        return _parse(lambda: [MemoryKnownEntity.model_validate(e) for e in data["entities"]])
+
+    async def name_entity(self, body: dict[str, Any]) -> MemoryKnownEntity:
+        data = await self._json("POST", "/known-entities", json=body)
+        if data is None:
+            raise MemoryUnavailable("memory_bad_response")
+        return _parse(lambda: MemoryKnownEntity.model_validate(data))
+
+    async def unname_entity(self, user_id: str, name: str) -> bool:
+        """False: no such entry (memory answers 404)."""
+        body = {"userId": user_id, "name": name}
+        return await self._json("POST", "/known-entities/remove", json=body) is not None
 
 
 def _parse[T](build: Callable[[], T]) -> T:
