@@ -7,7 +7,9 @@ conversation (they may carry its words), and nothing else.
 
 A proposed topic split is checked in code: the cited segment must be a line of this moment,
 and each side must keep MIN_SIDE_LINES lines and MIN_SIDE_SECONDS. A valid split is a model
-`split_at` Link; a rejected one is a rule Link with reason `split_rejected:<why>`.
+`split_at` Link; a rejected one is a rule Link with reason `split_rejected:<why>`. The lines
+after a split are asked again (part n, own Link key), so one moment can split up to
+MAX_SPLITS_PER_MOMENT times.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ class StateInput:
     moment_key: str
     prior: Side | None  # what the conversation holds before these lines
     allow_split: bool = True
+    part: int = 0  # 0: the whole moment; n: the lines after the n-th split in it
 
 
 @dataclass(frozen=True)
@@ -108,7 +111,7 @@ class StateUpdater:
         recording_id = inp.lines[0].recording_id
         if problem is not None or index is None:
             return LinkSpec(
-                key=split_key(inp.moment_key),
+                key=split_key(inp.moment_key, inp.part),
                 digest=digest,
                 kind=LinkKind.continues,
                 from_id=recording_id,
@@ -118,7 +121,7 @@ class StateUpdater:
                 reason=f"split_rejected:{problem}",
             )
         return LinkSpec(
-            key=split_key(inp.moment_key),
+            key=split_key(inp.moment_key, inp.part),
             digest=digest,
             kind=LinkKind.split_at,
             from_id=recording_id,

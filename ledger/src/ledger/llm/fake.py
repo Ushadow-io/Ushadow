@@ -4,7 +4,8 @@
             already in the state's people; else new.
 - state:    topic = first 4 words of the conversation's first line (kept once set); people =
             names heard; threads = lines that end with "?". With `split_marker`, the first line
-            that contains it is reported as `topicChangedAt`.
+            that contains it is reported as `topicChangedAt` (not line 1 of a conversation
+            with no topic yet, so the part after a split can split again at the next one).
 - composer: title = topic; summary = topic + threads; citations = the first two line ids.
 """
 
@@ -67,7 +68,10 @@ class FakeModel:
         marker = self.behaviour.split_marker
         if not payload.get("allowSplit") or not marker:
             return None
-        hit = next((seg_id for seg_id, _, text in rows if marker in text), None)
+        # a conversation with no topic yet (a new one, e.g. the part after a split) cannot
+        # change topic at its first line: look for the next marker
+        skip = 0 if payload["state"]["topic"] else 1
+        hit = next((seg_id for seg_id, _, text in rows[skip:] if marker in text), None)
         if hit and self.behaviour.bogus_split:
             return "seg-that-does-not-exist"
         return hit

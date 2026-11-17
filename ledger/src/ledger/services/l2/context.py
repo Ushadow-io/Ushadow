@@ -3,6 +3,7 @@
 Keys (the question that is decided; the answer is the Link kind):
 - join:{prevMomentKey}:{nextMomentKey}:{JOIN_POLICY}   continues | unrelated
 - split:{momentKey}:{SPLIT_POLICY}                     split_at (or a rejected split)
+- split:{momentKey}#{n}:{SPLIT_POLICY}                  the same, for the part after split n
 - daypass:{prevMomentKey}:{nextMomentKey}:{DAYPASS_POLICY}   continues
 
 A machine Link (rule or model) has id hash(owner, key, input digest). A run first looks for a
@@ -30,8 +31,11 @@ def join_key(prev_key: str, next_key: str) -> str:
     return f"join:{prev_key}:{next_key}:{JOIN_POLICY}"
 
 
-def split_key(moment_key: str) -> str:
-    return f"split:{moment_key}:{SPLIT_POLICY}"
+def split_key(moment_key: str, part: int = 0) -> str:
+    """Key of the split question of one part of a moment: part 0 is the whole moment, part n
+    the lines after its n-th split. A human Link on the part 0 key covers every part."""
+    name = moment_key if part == 0 else f"{moment_key}#{part}"
+    return f"split:{name}:{SPLIT_POLICY}"
 
 
 def daypass_key(prev_key: str, next_key: str) -> str:

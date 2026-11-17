@@ -33,6 +33,14 @@ def overlaps(a: TimeRange, b: TimeRange) -> bool:
     return utc(a.start) < utc(b.end) and utc(b.start) < utc(a.end)
 
 
+def holds(rng: TimeRange, span: TimeRange) -> bool:
+    """True when span belongs to rng: it starts inside rng (both ends included) or shares time
+    with it. Unlike `overlaps`, a zero-length span (a segment with start == end, common in
+    real transcripts) at the start or end of rng belongs to it. This is the ONE membership
+    rule of a segment and a moment, used by the cutter, the content hash and L2 lines."""
+    return utc(rng.start) <= utc(span.start) <= utc(rng.end) or overlaps(span, rng)
+
+
 def overlap_seconds(a: TimeRange, b: TimeRange) -> float:
     start = max(utc(a.start), utc(b.start))
     end = min(utc(a.end), utc(b.end))

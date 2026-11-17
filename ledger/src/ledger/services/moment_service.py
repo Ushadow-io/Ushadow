@@ -18,7 +18,7 @@ from ledger.revisions import cut_source
 from ledger.schema import Recording, Segment, TimeRange, Transcript
 from ledger.services.moment_cutter import CutInput, CutPolicy, Span, cut
 from ledger.stores import Outcome, Stores
-from ledger.timeutil import now_utc, overlaps, stable_hash, ts, utc
+from ledger.timeutil import holds, now_utc, stable_hash, ts, utc
 
 Clock = Callable[[], datetime]
 
@@ -32,7 +32,7 @@ def content_hash(segments: Sequence[Segment], rng: TimeRange) -> str:
     inside = [
         (ts(s.start), ts(s.end), s.speakerLabel, s.text)
         for s in segments
-        if overlaps(TimeRange(start=s.start, end=s.end), rng)
+        if holds(rng, TimeRange(start=s.start, end=s.end))
     ]
     return stable_hash(*sorted(inside), length=32)
 
@@ -71,10 +71,12 @@ class MomentService:
         counts.present = len(existing)
         await self._refresh(existing, current, current_segs, counts)
         erased = [e.range for e in await self._s.erasures.for_recording(user_id, recording_id)]
-        barriers = [m.range for m in existing] + erased
+        barriers = [m.range for m in existing]
         for revision in dict.fromkeys([source, current]):  # source first, then current
             segs = await self._s.segments.segments(user_id, recording_id, revision)
-            data = CutInput(segs, barriers, horizon=rec.range.end, closed=self._closed(rec))
+            data = CutInput(
+                segs, barriers, horizon=rec.range.end, closed=self._closed(rec), erased=erased
+            )
             for span in cut(data, self._policy):
                 moment = self._moment(rec, user_id, span, (revision, current, current_segs))
                 if await self._s.moments.add(moment) == Outcome.created:

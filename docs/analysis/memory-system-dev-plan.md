@@ -231,3 +231,31 @@ Rules that changed during the build:
 - A conversation id is anchored on its oldest stored moment. It stays when speech arrives before the start. When an id must change, the old conversation is retired with `replacedBy`.
 - Every route of both services needs a bearer token, except `/health`. No token set means every call is refused.
 - The memory service follows the ledger through `GET /conversations/changes` and the ledger's own cursor.
+
+## 11. First results with a real model (2026-11-16 and 2026-11-17)
+
+Model: `Qwen3.6-35B-A3B-MTP-GGUF` on the cluster server, thinking off. Details: `ledger/eval/RESULT-golden.md`, `ledger/eval/RESULT-synthetic.md`, `memory/spike/RESULT-golden.md`, `memory/spike/RESULT-synthetic.md`. Golden days: 7, 10, 13 and 14 Nov (git-ignored, private).
+
+| Question | Result |
+|---|---|
+| 14 Nov, 3 fresh ledgers | 7, 6, 6 conversations. Chronicle gave 8, 10, 11. The only difference is 1 topic split |
+| 14 Nov, re-run in the same ledger | Identical, 0 model calls |
+| 13 Nov, 3 fresh ledgers | 3, 3, 3. They match Chronicle's 3 episodes one to one |
+| Time for 14 Nov (131 min of speech) | 4 to 15 minutes, one user on the GPU |
+| Largest model input | About 2,600 tokens |
+| Joins on 14 Nov | 44 of 48 by rules, 4 by the model |
+| Topic splits on synthetic days with an answer key | Weak: 1 of 10 found. Joins: 14 of 18 right |
+| Graphiti, synthetic | 5 to 10 calls per conversation, 0 JSON failures, 71 % of facts fully correct, rebuild overlap about half |
+| Graphiti, 13 Nov | 3 facts, none about the user. 2 came from background media. All speaker roles are `unknown` |
+
+What the real data changed:
+- Bug found and fixed: a zero-length segment on a moment edge made a new moment at each re-ingest (14 Nov: 53 to 58). All four golden days now give the same moments after 1, 2 and 3 ingests.
+- A moment can now split up to 3 times (was 1). Real-model quality for this is not measured.
+- The model server is not deterministic, even at temperature 0 with a fixed seed. Fresh runs differ. Only saved decisions give the same result, and they do.
+- One model for every role. A second model on this server costs minutes at each change.
+- The biggest quality problem is the input: no speaker is marked as the owner, so background media becomes facts. Speaker identity must come before fact extraction.
+
+Open:
+- Two zero-length segments at the same instant with different text collide on the segment key, and the second is refused (5 segments on 14 Nov).
+- Graphiti on 14 Nov, 7 Nov and 10 Nov. The 50-fact hand check by the user.
+- The engine decision (Graphiti or own extraction).

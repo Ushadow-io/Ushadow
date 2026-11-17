@@ -25,6 +25,7 @@ FALLBACK_GAP_SECONDS = 300
 
 MIN_SIDE_LINES = 2
 MIN_SIDE_SECONDS = 5.0
+MAX_SPLITS_PER_MOMENT = 3  # topic splits inside one moment (human splits are not counted)
 
 
 @dataclass(frozen=True)
