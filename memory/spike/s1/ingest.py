@@ -3,6 +3,7 @@ measure each one. Logs and metrics hold ids and counts, never transcript text.""
 
 from __future__ import annotations
 
+import os
 import time
 import traceback
 from pathlib import Path
@@ -39,6 +40,9 @@ async def ingest(
                 reference_time=ep.reference_time,
                 source=EpisodeType.message,
                 group_id=group,
+                # Default (None): Graphiti puts the last 10 episodes in full into every big prompt.
+                # SPIKE_NO_PREVIOUS=1 sends none, to measure what that context costs.
+                previous_episode_uuids=[] if os.environ.get("SPIKE_NO_PREVIOUS") == "1" else None,
             )
             row["wall_s"] = round(time.perf_counter() - t0, 3)
             id_map[ep.episode_id] = res.episode.uuid

@@ -97,3 +97,26 @@ Graphiti stays as the engine behind the memory port. Open work, in order:
 2. Duplicates: Graphiti's own dedupe leaves duplicates; the consolidation job (M5.1) must merge them.
 3. Media: handled outside the engine, by speaker roles and the owner gate.
 4. Not proven: closing of old facts (0 closed on 2 days), and stability of a rebuild on a long day.
+
+## Cost test 1: no previous episodes (2026-11-17)
+
+`SPIKE_NO_PREVIOUS=1` passes `previous_episode_uuids=[]`, so Graphiti does not put the last 10
+episodes into its prompts. Same day (14 Nov), same model, fresh group.
+
+| Metric | Default | No previous | Change |
+|---|---|---|---|
+| Input tokens | 436 302 | 243 593 | -44 % |
+| LLM seconds | 1 881 | 904 | -52 % |
+| LLM calls | 103 | 151 | +47 % |
+| Largest `extract_message` input | 20 506 | 5 938 | -71 % |
+| Facts | 65 | 77 | +12 |
+| Entities | 96 vs 79 | | +17 |
+| Entities that are a diarization label | 4 | 4 | 0 |
+| Failed episodes | 0 | 0 | |
+
+- The four prompts that carry episode text fell from 373 558 to 146 101 input tokens (-61 %).
+- Calls rose: `extract_timestamps` 12 to 45, `resolve_edge` 51 to 66. These are per-fact calls and now
+  cost 97 492 input tokens (40 % of the total).
+- 17 more entities and 12 more facts. Cause not known: it can be more duplicate entities without
+  the context, or model variance (the server is not deterministic; an earlier rebuild shared about
+  half its facts). Not checked by hand.
