@@ -2,7 +2,8 @@
 
 All text is invented. Shapes taken from real days (counts and times only):
 - zero-length segments (start == end), often two or three at the very start of a recording,
-  at the same instant as the next real segment;
+  at the same instant as the next real segment, with different words (and sometimes a group
+  of them mid-recording too);
 - segments that overlap the one before, and segments listed out of time order;
 - pauses of every size, from 0 to well over the 45 s hard pause.
 """
@@ -47,6 +48,8 @@ def random_segments(rnd: random.Random, prefix: str, start: datetime) -> list[Se
     for i in range(rnd.randint(1, 3)):  # the leading zero-length segments of real days
         out.append(_seg(rnd, f"{prefix}-z{i}", t, t))
     for i in range(rnd.randint(5, 140)):
+        if rnd.random() < 0.03:  # two or three zero-length segments at one instant
+            out.extend(_seg(rnd, f"{prefix}-{i}z{k}", t, t) for k in range(rnd.randint(2, 3)))
         length = 0.0 if rnd.random() < 0.05 else round(rnd.uniform(0.1, 9.0), 3)
         out.append(_seg(rnd, f"{prefix}-{i}", t, t + timedelta(seconds=length)))
         t = max(t, t + timedelta(seconds=length + _pause(rnd)))

@@ -16,6 +16,7 @@ from ledger.schema import CaptureBundle, Recording, Segment, TimeRange, Transcri
 from ledger.services import Services, build_services
 from ledger.services.moment_cutter import CutInput, cut
 from ledger.stores import build_stores
+from ledger.stores.evidence import segment_identity
 from ledger.timeutil import holds, overlaps
 from tests.conftest import fake_models, make_services, new_db
 from tests.fixtures.bundle import USER, at
@@ -122,7 +123,16 @@ def _clocked() -> tuple[Services, dict]:
 async def _ingest_live(services: Services, clock: dict, day: RandomDay) -> None:
     for when, post in day.live_posts():
         clock["t"] = when
-        await services.ingest.ingest(post)
+        assert (await services.ingest.ingest(post)).refusals == []
+
+
+def _identities(request: IngestRequest) -> set[tuple]:
+    """Distinct final segments of a request: time range + body without the sender's id."""
+    return {
+        (t.recordingId, t.revision, segment_identity(s.model_dump(mode="json")))
+        for t in request.bundle.transcripts
+        for s in t.segments
+    }
 
 
 @pytest.mark.parametrize("seed", range(25))
@@ -134,10 +144,12 @@ async def test_random_days_give_the_same_moments_on_every_ingest(seed):
     shapes = []
     for _ in range(3):
         result = await batch.ingest.ingest(day.batch())
+        assert result.refusals == []  # several segments at one instant are all evidence
         shapes.append(_shape(await batch.query.moments(RUSER, None)))
         if len(shapes) > 1:
             assert result.moments.created == 0 and result.moments.rerun == 0
     assert shapes[0] == shapes[1] == shapes[2]
+    assert len(await batch.stores.segments.find({})) == len(_identities(day.batch()))
     await _assert_covered(batch, RUSER)
 
     live, clock = _clocked()

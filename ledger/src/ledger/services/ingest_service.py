@@ -1,8 +1,11 @@
 """POST /ingest: store a (partial) CaptureBundle. Safe to repeat.
 
-Keys: recording = owner + id; transcript = owner + recording + revision; segment = owner +
-recording + revision + time range; correction, gap, link = owner + id. The same item sent twice
-is one record. A different body under a stored key is refused, never written.
+Keys: recording = owner + id; transcript = owner + recording + revision; final segment = owner +
+recording + revision + time range + identity (body without the sender's id; see
+stores.evidence.FinalSlots for several segments at one instant); correction, gap, link = owner +
+id. The same item sent twice is one record. A different body under a stored key (for a final
+segment: a different segment in a range whose stored segments the post does not all carry) is
+refused, never written.
 
 Provisional transcripts (`status: provisional`, see revisions.is_provisional): while the
 recording has no final revision, provisional segments may be appended and one with the same
@@ -20,7 +23,7 @@ from collections.abc import Awaitable
 
 from ledger.models import IngestRequest, IngestResult, Refusal, TypeCounts
 from ledger.revisions import draft, finals, pick_current, provisional
-from ledger.schema import CaptureBundle, Recording, TimeRange, Transcript
+from ledger.schema import CaptureBundle, Recording, Segment, TimeRange, Transcript
 from ledger.services.duplicate_service import DuplicateService
 from ledger.services.moment_service import MomentService
 from ledger.services.redaction import is_erased, strip_audio_pointer
@@ -35,6 +38,10 @@ IGNORED_IN_M1 = (
     "entities",
     "facts",
 )
+
+
+def _span(seg: Segment) -> TimeRange:
+    return TimeRange(start=seg.start, end=seg.end)
 
 
 def _add(counts: TypeCounts, outcome: Outcome) -> None:
@@ -124,15 +131,25 @@ class IngestService:
                 return
         if not await run.save(counts, ref, self._s.transcripts.save(run.user_id, transcript)):
             return
-        erased = await self._erased(run, transcript.recordingId)
-        seg_counts = run.result.segments
-        for seg in transcript.segments:
-            if is_erased(TimeRange(start=seg.start, end=seg.end), erased):
-                seg_counts.excluded += 1
-                continue
-            write = self._s.segments.save(run.user_id, transcript, seg)
-            await run.save(seg_counts, ("segment", seg.id), write)
+        await self._segments(run, transcript)
         run.touched.add(transcript.recordingId)
+
+    async def _segments(self, run: _Run, transcript: Transcript) -> None:
+        """Erased ranges are left out; final segments are matched per time range (FinalSlots)."""
+        erased = await self._erased(run, transcript.recordingId)
+        counts = run.result.segments
+        kept = [s for s in transcript.segments if not is_erased(_span(s), erased)]
+        counts.excluded += len(transcript.segments) - len(kept)
+        store = self._s.segments
+        if provisional(transcript):
+            for seg in kept:
+                write = store.save_provisional(run.user_id, transcript, seg)
+                await run.save(counts, ("segment", seg.id), write)
+            return
+        slots = await store.final_slots(run.user_id, transcript, kept)
+        for seg in kept:
+            write = store.save_final(run.user_id, transcript, seg, slots)
+            await run.save(counts, ("segment", seg.id), write)
 
     async def _set_pointer(self, run: _Run, recording_id: str) -> None:
         """currentTranscriptRevision: the named final, else the newest final, else live."""

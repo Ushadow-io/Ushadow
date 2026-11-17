@@ -13,9 +13,9 @@ from ledger.schema import (
     Transcript,
     TranscriptCorrection,
 )
-from ledger.stores.base import Doc, EvidenceStore, Outcome
+from ledger.stores.base import Doc, EvidenceImmutableError, EvidenceStore, Outcome
 from ledger.stores.growth import grow_recording, grow_transcript_header
-from ledger.timeutil import ts
+from ledger.timeutil import fingerprint, ts
 
 
 def range_query(user_id: str, rng: TimeRange | None, **extra: Any) -> Doc:
@@ -99,8 +99,53 @@ class TranscriptStore(EvidenceStore):
         return [Transcript.model_validate(d["body"]) for d in docs]
 
 
+Slot = tuple[str, str]  # (start, end) of a segment, as stored index fields
+
+
+def segment_identity(body: Doc) -> str:
+    """What makes a final segment the same segment: its whole body except the sender's id.
+
+    Senders do not give stable ids (the Chronicle adapter uses start ms + speaker, which two
+    segments at one instant share; the export tool uses an ordinal that shifts when a segment is
+    added before it), so the id is not part of what is compared.
+    """
+    return fingerprint({k: v for k, v in body.items() if k != "id"})
+
+
+def _slot(seg: Segment) -> Slot:
+    return ts(seg.start), ts(seg.end)
+
+
+class FinalSlots:
+    """The identities stored per time range of one final revision, and those of the post.
+
+    A time range can hold several segments (real transcripts have two or three zero-length
+    segments at one instant). A new identity in an occupied range is accepted only when the
+    post also carries every identity already stored there: then it is another segment at that
+    instant. Otherwise it would change stored evidence and is refused.
+    """
+
+    def __init__(self, stored: dict[Slot, set[str]], sent: dict[Slot, set[str]]) -> None:
+        self.stored = stored
+        self.sent = sent
+
+    def decide(self, slot: Slot, identity: str) -> Outcome | None:
+        """present, created (to insert), or None (refused)."""
+        held = self.stored.setdefault(slot, set())
+        if identity in held:
+            return Outcome.present
+        if held - self.sent.get(slot, set()):
+            return None
+        return Outcome.created
+
+
 class SegmentStore(EvidenceStore):
-    """One document per segment. Key = recording + revision + time range.
+    """One document per segment.
+
+    Final segments: key = recording + revision + time range + identity (segment_identity), so
+    several segments at one instant each have a key and arrival order does not matter.
+    Documents written before the identity was in the key (key = recording + revision + time
+    range) are matched by their range and identity, not their key, so they stay `present`.
 
     Provisional segments are keyed on their start only (Chronicle refines a live segment's end
     and text under the same start), so a refined provisional segment replaces the old one.
@@ -109,11 +154,13 @@ class SegmentStore(EvidenceStore):
     @staticmethod
     def key(user_id: str, transcript: Transcript, seg: Segment) -> str:
         base = f"{user_id}|{transcript.recordingId}|{transcript.revision}|{ts(seg.start)}"
-        return base if provisional(transcript) else f"{base}|{ts(seg.end)}"
+        if provisional(transcript):
+            return base
+        identity = segment_identity(seg.model_dump(mode="json"))
+        return f"{base}|{ts(seg.end)}|{identity[:24]}"
 
-    async def save(self, user_id: str, transcript: Transcript, seg: Segment) -> Outcome:
-        """Final revisions: insert once. Provisional: the overwrite path (see ingest)."""
-        doc = {
+    def _doc(self, user_id: str, transcript: Transcript, seg: Segment) -> Doc:
+        return {
             "_id": self.key(user_id, transcript, seg),
             "userId": user_id,
             "recordingId": transcript.recordingId,
@@ -122,9 +169,39 @@ class SegmentStore(EvidenceStore):
             "end": ts(seg.end),
             "body": seg.model_dump(mode="json"),
         }
-        if provisional(transcript):
-            return await self.put_provisional(doc)
-        return await self.put(doc)
+
+    async def save_provisional(self, user_id: str, transcript: Transcript, seg: Segment) -> Outcome:
+        """The overwrite path (see ingest)."""
+        return await self.put_provisional(self._doc(user_id, transcript, seg))
+
+    async def final_slots(
+        self, user_id: str, transcript: Transcript, incoming: list[Segment]
+    ) -> FinalSlots:
+        """What is stored for this final revision, and what this post carries, per range."""
+        stored: dict[Slot, set[str]] = {}
+        for doc in await self.list(user_id, transcript.recordingId, transcript.revision):
+            stored.setdefault((doc["start"], doc["end"]), set()).add(segment_identity(doc["body"]))
+        sent: dict[Slot, set[str]] = {}
+        for seg in incoming:
+            sent.setdefault(_slot(seg), set()).add(segment_identity(seg.model_dump(mode="json")))
+        return FinalSlots(stored, sent)
+
+    async def save_final(
+        self, user_id: str, transcript: Transcript, seg: Segment, slots: FinalSlots
+    ) -> Outcome:
+        """Insert once. Raises EvidenceImmutableError when it would change stored evidence."""
+        slot, identity = _slot(seg), segment_identity(seg.model_dump(mode="json"))
+        decided = slots.decide(slot, identity)
+        if decided is None:
+            raise EvidenceImmutableError(f"refused: stored evidence at {slot} differs")
+        if decided is Outcome.present:
+            return decided
+        try:
+            outcome = await self.put(self._doc(user_id, transcript, seg))
+        except EvidenceImmutableError:  # same key = same identity, stored under another id
+            outcome = Outcome.present
+        slots.stored[slot].add(identity)
+        return outcome
 
     async def list(
         self,
@@ -136,7 +213,8 @@ class SegmentStore(EvidenceStore):
         extra: Doc = {"recordingId": recording_id}
         if revision is not None:
             extra["revision"] = revision
-        return await self.find(range_query(user_id, rng, **extra), sort=[("start", 1), ("end", 1)])
+        sort = [("start", 1), ("end", 1), ("_id", 1)]  # _id: same order for equal-time segments
+        return await self.find(range_query(user_id, rng, **extra), sort=sort)
 
     async def segments(self, user_id: str, recording_id: str, revision: str) -> list[Segment]:
         docs = await self.list(user_id, recording_id, revision)
