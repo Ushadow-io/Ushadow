@@ -68,6 +68,9 @@ class Template(BaseModel):
     # UI metadata
     icon: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
+    login_handoff: Optional[str] = Field(
+        None, description="Token audience; links open the web UI signed in via #token="
+    )
 
     # Configuration status (for providers - whether required keys are set)
     configured: bool = Field(default=True, description="Whether required config is present")

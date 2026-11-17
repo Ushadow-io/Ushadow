@@ -124,6 +124,9 @@ export const authApi = {
     return api.post('/api/auth/login', { email, password })
   },
   getMe: () => api.get('/api/auth/me'),
+  /** Mint a short-lived JWT for the current user that another service (e.g. Chronicle) accepts. */
+  getServiceToken: (audiences: string[]) =>
+    api.post<{ access_token: string; token_type: string; audiences: string[] }>('/api/auth/service-token', { audiences }),
 }
 
 export const setupApi = {
@@ -684,6 +687,7 @@ export interface KubernetesCluster {
   ingress_class?: string
   ingress_enabled_by_default?: boolean
   tailscale_magicdns_enabled?: boolean
+  tailscale_proxy_group?: string
 }
 
 // DNS Management types
@@ -740,6 +744,20 @@ export interface KubernetesNode {
   labels: Record<string, string>
 }
 
+/** An OpenAI-compatible LLM server found in a cluster (GET /api/kubernetes/{id}/llm-services). */
+export interface ClusterLlmService {
+  name: string
+  namespace: string
+  port: number
+  /** http://svc.ns.svc.cluster.local:port */
+  base_url: string
+  /** base_url + /v1 */
+  openai_url: string
+  models: string[]
+  /** True when the Service carries the ushadow.io/capability=llm label */
+  labelled: boolean
+}
+
 export const kubernetesApi = {
   addCluster: (data: { name: string; kubeconfig: string; context?: string; namespace?: string; labels?: Record<string, string> }) =>
     api.post<KubernetesCluster>('/api/kubernetes', data),
@@ -758,6 +776,7 @@ export const kubernetesApi = {
     ingress_class?: string
     ingress_enabled_by_default?: boolean
     tailscale_magicdns_enabled?: boolean
+    tailscale_proxy_group?: string
   }) =>
     api.patch<KubernetesCluster>(`/api/kubernetes/${clusterId}`, updates),
 
@@ -768,6 +787,10 @@ export const kubernetesApi = {
     api.get<{ services: any[] }>('/api/kubernetes/services/infra'),
 
   // Cluster operations
+  discoverLlmServices: (clusterId: string) =>
+    api.get<{ cluster_id: string; services: ClusterLlmService[] }>(
+      `/api/kubernetes/${clusterId}/llm-services`
+    ),
   scanInfraServices: (clusterId: string, namespace: string = 'default') =>
     api.post<{ cluster_id: string; namespace: string; infra_services: Record<string, any> }>(
       `/api/kubernetes/${clusterId}/scan-infra`,
@@ -1512,6 +1535,8 @@ export interface Template {
   mode?: 'cloud' | 'local'
   icon?: string
   tags: string[]
+  /** Token audience: links open the web UI already signed in (via #token=) */
+  login_handoff?: string
   configured: boolean  // Whether required config fields are set (for providers)
   running: boolean     // Whether local service is running (Docker container up)
   installed: boolean   // Whether user has added this from the registry

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from src.models.kubernetes import KubernetesDeploymentSpec
+from src.utils.environment import ENVIRONMENT_LABEL, environment_label_value
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__, prefix="K8s")
@@ -69,6 +70,8 @@ class KubernetesManifestBuilder:
             "app.kubernetes.io/name": name,
             "app.kubernetes.io/instance": safe_service_id,
             "app.kubernetes.io/managed-by": "ushadow",
+            # Which ushadow environment owns this deploy, so it can be listed in any namespace.
+            ENVIRONMENT_LABEL: environment_label_value(),
             **spec.labels,
         }
 
@@ -374,12 +377,19 @@ class KubernetesManifestBuilder:
         # an immutable-field change.
         pod_template_labels = {**selector_labels, **spec.pod_labels}
 
+        # A GPU pod cannot surge: the new pod waits for the GPU the old pod still
+        # holds, so a rolling restart never finishes. Recreate frees it first.
+        limits = container["resources"].get("limits", {})
+        uses_gpu = any(key.endswith("/gpu") for key in limits)
+        strategy = {"type": "Recreate"} if uses_gpu else {"type": "RollingUpdate"}
+
         return {
             "apiVersion": "apps/v1",
             "kind": "Deployment",
             "metadata": {"name": name, "namespace": namespace, "labels": labels},
             "spec": {
                 "replicas": spec.replicas,
+                "strategy": strategy,
                 "selector": {"matchLabels": selector_labels},
                 "template": {
                     "metadata": {"labels": pod_template_labels, "annotations": spec.annotations},
@@ -413,6 +423,23 @@ class KubernetesManifestBuilder:
             },
         }
 
+    @staticmethod
+    def _ingress_paths(name: str, path: str, port: int, ingress: Dict) -> List[Dict]:
+        """
+        Ingress paths: each extra route (`ingress["routes"]`: {path, service, port})
+        first, then the service's own path. Prefix matching picks the longest
+        path, so `/api` reaches its service while `/` stays with this one.
+        """
+        def entry(p: str, svc: str, svc_port: int) -> Dict:
+            return {
+                "path": p,
+                "pathType": "Prefix",
+                "backend": {"service": {"name": svc, "port": {"number": int(svc_port)}}},
+            }
+
+        routes = [entry(r["path"], r["service"], r["port"]) for r in ingress.get("routes") or []]
+        return routes + [entry(path, name, port)]
+
     def _ingress(
         self,
         name: str,
@@ -423,19 +450,7 @@ class KubernetesManifestBuilder:
     ) -> Dict:
         ingress_class = spec.ingress.get("ingressClassName", "nginx")
         path = spec.ingress.get("path", "/")
-        backend = {
-            "service": {
-                "name": name,
-                "port": {"number": container_ports[0]["port"]},
-            }
-        }
-        http_rule = {
-            "paths": [{
-                "path": path,
-                "pathType": "Prefix",
-                "backend": backend,
-            }]
-        }
+        http_rule = {"paths": self._ingress_paths(name, path, container_ports[0]["port"], spec.ingress)}
 
         if ingress_class == "tailscale":
             proxy_group = spec.ingress.get("proxyGroup", "ushadow-proxies")

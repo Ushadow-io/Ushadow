@@ -34,6 +34,7 @@ import {
 import { CapabilitySlot } from './CapabilitySlot'
 import { SettingField } from '../settings/SettingField'
 import { useProviderConfigs, type ProviderOption, type UseProviderConfigsOptions } from '../../hooks/useProviderConfigs'
+import { useLoginHandoff } from '../../hooks/useLoginHandoff'
 import type { Template, ServiceConfigSummary, Wiring } from '../../services/api'
 
 // ============================================================================
@@ -463,6 +464,7 @@ export function FlatServiceCard({
     return undefined
   }, [providerTemplates, allConfigs])
   const [startingWorker, setStartingWorker] = useState<string | null>(null)
+  const openWithLogin = useLoginHandoff()
   const [expandedWorkerId, setExpandedWorkerId] = useState<string | null>(null)
   const [creatingCapability, setCreatingCapability] = useState<string | null>(null)
   const [showDeployMenu, setShowDeployMenu] = useState(false)
@@ -899,7 +901,14 @@ export function FlatServiceCard({
                                     rel="noopener noreferrer"
                                     className="text-xs text-primary-600 dark:text-primary-400 hover:underline truncate"
                                     data-testid={`deployment-url-${deployment.id}`}
-                                    onClick={(e) => e.stopPropagation()}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      // Plain left click opens the web UI signed in; other clicks keep the bare link.
+                                      if (template.login_handoff && e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+                                        e.preventDefault()
+                                        void openWithLogin(url, template.login_handoff)
+                                      }
+                                    }}
                                   >
                                     {url.replace(/^https?:\/\//, '')}
                                   </a>

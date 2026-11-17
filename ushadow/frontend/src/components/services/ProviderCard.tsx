@@ -4,7 +4,16 @@
 
 import { AlertCircle, CheckCircle, ChevronUp, Cloud, HardDrive, Loader2, Pencil, Save } from 'lucide-react'
 import EnvVarEditor from '../EnvVarEditor'
+import LlmServicePicker from './LlmServicePicker'
 import { EnvVarInfo, EnvVarConfig, ServiceConfigSummary } from '../../services/api'
+
+/** Fill an env var the same way typing into EnvVarEditor does (a new literal setting). */
+const literalUpdate = (name: string, value: string): Partial<EnvVarConfig> => ({
+  source: 'new_setting',
+  new_setting_path: `settings.${name.toLowerCase()}`,
+  value,
+  setting_path: undefined,
+})
 
 interface ProviderCardProps {
   provider: any
@@ -34,6 +43,13 @@ export default function ProviderCard({
   isSaving,
 }: ProviderCardProps) {
   const isConfigured = provider.configured !== false
+  // LLM providers get a cluster picker that fills *_BASE_URL (and *_MODEL if present).
+  const urlVar = provider.provides === 'llm' ? envVars.find((v) => v.name.endsWith('_BASE_URL')) : undefined
+  const modelVar = envVars.find((v) => v.name.endsWith('_MODEL'))
+  const handleLlmPick = (url: string, model?: string) => {
+    if (urlVar) onEnvConfigChange(urlVar.name, literalUpdate(urlVar.name, url))
+    if (model && modelVar) onEnvConfigChange(modelVar.name, literalUpdate(modelVar.name, model))
+  }
 
   return (
     <div
@@ -126,6 +142,16 @@ export default function ProviderCard({
             </div>
           ) : envVars.length > 0 ? (
             <>
+              {urlVar && (
+                <div className="flex justify-end px-3 pt-2">
+                  <LlmServicePicker
+                    id={provider.id}
+                    // Ollama's native URL has no /v1; every other LLM provider speaks the OpenAI API.
+                    urlStyle={urlVar.name.startsWith('OLLAMA_') ? 'base' : 'openai'}
+                    onPick={handleLlmPick}
+                  />
+                </div>
+              )}
               <div className="max-h-80 overflow-y-auto">
                 {envVars.map((envVar) => {
                   const config = envConfigs[envVar.name] || {

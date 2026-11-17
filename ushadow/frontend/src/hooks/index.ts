@@ -22,6 +22,9 @@ export { useGraphApi } from './useGraphApi';
 export { useQrCode, useMobileQrCode } from './useQrCode';
 export type { QrCodeData, UseQrCodeOptions } from './useQrCode';
 
+// Kubernetes discovery hooks
+export { useKubernetesClusters, useClusterLlmServices } from './useClusterLlmServices';
+
 // Provider configuration and wiring hooks
 export { useProviderConfigs } from './useProviderConfigs';
 export type {
@@ -48,9 +51,15 @@ export type { ServiceConfigData, UseServiceConfigDataResult } from './useService
 export { useServiceCatalog } from './useServiceCatalog';
 export type { UseServiceCatalogResult } from './useServiceCatalog';
 
+export { useRootServiceFilter, isRootService, ROOT_SERVICE_TAG } from './useRootServiceFilter';
+export type { UseRootServiceFilterResult } from './useRootServiceFilter';
+
 export { useDeploymentActions } from './useDeploymentActions';
 export type { UseDeploymentActionsResult } from './useDeploymentActions';
 
 // Sharing hooks
 export { useShare } from './useShare';
 export type { UseShareOptions, UseShareReturn } from './useShare';
+
+// Open a service web UI signed in as the current user
+export { useLoginHandoff } from './useLoginHandoff';

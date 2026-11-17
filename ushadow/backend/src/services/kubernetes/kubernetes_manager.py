@@ -27,6 +27,7 @@ from .kubernetes_client import KubernetesClient
 from .kubernetes_cluster_store import KubernetesClusterStore
 from .kubernetes_deploy import KubernetesDeployService
 from .kubernetes_manifest_builder import KubernetesManifestBuilder
+from .llm_discovery import LlmEndpoint, LlmServiceDiscovery
 
 logger = get_logger(__name__, prefix="K8s")
 
@@ -49,6 +50,7 @@ class KubernetesManager:
         self._store = KubernetesClusterStore(db, self._k8s_client)
         self._builder = KubernetesManifestBuilder()
         self._deploy = KubernetesDeployService(self._k8s_client, self._builder)
+        self._llm_discovery = LlmServiceDiscovery(self._k8s_client)
 
     # -------------------------------------------------------------------------
     # Lifecycle
@@ -390,6 +392,34 @@ class KubernetesManager:
 
         return None
 
+    def get_tailscale_urls(self, cluster_id: str, namespace: str) -> dict[str, str]:
+        """
+        Map K8s service name -> https URL of its Tailscale ingress (MagicDNS name).
+
+        The Tailscale operator writes the full `<host>.<tailnet>.ts.net` name into
+        the ingress status. One service can have several ingresses; the one named
+        `<service>-ts-ingress` (the name ushadow creates) wins.
+        """
+        from kubernetes import client
+
+        core_api, _ = self._k8s_client.get_kube_client(cluster_id)
+        networking_api = client.NetworkingV1Api(core_api.api_client)
+        urls: dict[str, str] = {}
+        for ing in networking_api.list_namespaced_ingress(namespace).items:
+            if ing.spec.ingress_class_name != "tailscale":
+                continue
+            lb = ing.status.load_balancer if ing.status else None
+            host = next((e.hostname for e in (lb.ingress or []) if e.hostname), None) if lb else None
+            paths = ing.spec.rules[0].http.paths if ing.spec.rules and ing.spec.rules[0].http else []
+            # The ingress belongs to the service on "/"; other paths (e.g. /api) are routes to others.
+            owner = next((p for p in paths if p.path in ("/", None)), paths[0] if paths else None)
+            svc = owner.backend.service.name if owner and owner.backend.service else None
+            if not host or not svc:
+                continue
+            if svc not in urls or ing.metadata.name == f"{svc}-ts-ingress":
+                urls[svc] = f"https://{host}"
+        return urls
+
     @staticmethod
     def _service_endpoints(svc: Any, ns: str) -> list[str]:
         """Collect reachable endpoint strings for a k8s Service object."""
@@ -403,6 +433,10 @@ class KubernetesManager:
                 lb_ip = svc.status.load_balancer.ingress[0].ip
                 endpoints.append(f"{lb_ip}:{port}")
         return endpoints
+
+    async def discover_llm_services(self, cluster_id: str) -> list[LlmEndpoint]:
+        """Find OpenAI-compatible LLM servers in the cluster (see llm_discovery)."""
+        return await self._llm_discovery.discover(cluster_id)
 
     async def scan_cluster_for_infra_services(
         self,

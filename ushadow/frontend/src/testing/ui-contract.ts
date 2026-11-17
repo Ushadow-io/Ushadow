@@ -126,6 +126,62 @@ export const envVarEditor = {
 } as const
 
 // =============================================================================
+// LLM SERVICE PICKER
+// =============================================================================
+
+/**
+ * LlmServicePicker - "Find on cluster" button + modal that lists LLM servers
+ * running in a Kubernetes cluster and fills a provider's URL/model.
+ *
+ * Import: `import LlmServicePicker from '@/components/services/LlmServicePicker'`
+ *
+ * @example
+ * <LlmServicePicker id="ollama-net" urlStyle="base" onPick={(url, model) => ...} />
+ */
+export const llmServicePicker = {
+  /** Opens the modal: `data-testid="llm-picker-{id}-open"` */
+  openButton: (id: string) => `llm-picker-${id}-open`,
+  /** Modal root: `data-testid="llm-picker-{id}"` */
+  modal: (id: string) => `llm-picker-${id}`,
+  /** Cluster dropdown (only when >1 cluster): `data-testid="llm-picker-{id}-cluster-select"` */
+  clusterSelect: (id: string) => `llm-picker-${id}-cluster-select`,
+  /** One found server: `data-testid="llm-picker-{id}-service-{namespace}-{name}-{port}"` */
+  service: (id: string, ns: string, name: string, port: number) =>
+    `llm-picker-${id}-service-${ns}-${name}-${port}`,
+  /** Use server without choosing a model */
+  useService: (id: string, ns: string, name: string, port: number) =>
+    `llm-picker-${id}-use-${ns}-${name}-${port}`,
+  /** Pick one model on a server */
+  model: (id: string, ns: string, name: string, port: number, model: string) =>
+    `llm-picker-${id}-model-${ns}-${name}-${port}-${model}`,
+} as const
+
+// =============================================================================
+// CLUSTER INGRESS SETTINGS
+// =============================================================================
+
+/**
+ * ClusterIngressSettings - per-cluster ingress defaults (class, domain,
+ * Tailscale ProxyGroup, auto-enable) on the Kubernetes Clusters page.
+ *
+ * Import: `import ClusterIngressSettings from '@/components/kubernetes/ClusterIngressSettings'`
+ *
+ * @example
+ * <ClusterIngressSettings cluster={cluster} onSaved={loadClusters} />
+ */
+export const clusterIngress = {
+  section: (clusterId: string) => `cluster-ingress-${clusterId}`,
+  edit: (clusterId: string) => `edit-ingress-${clusterId}`,
+  classSelect: (clusterId: string) => `ingress-class-select-${clusterId}`,
+  domainInput: (clusterId: string) => `ingress-domain-input-${clusterId}`,
+  proxyGroupInput: (clusterId: string) => `ingress-proxy-group-input-${clusterId}`,
+  defaultCheckbox: (clusterId: string) => `ingress-default-checkbox-${clusterId}`,
+  error: (clusterId: string) => `ingress-error-${clusterId}`,
+  cancel: (clusterId: string) => `cancel-ingress-${clusterId}`,
+  save: (clusterId: string) => `save-ingress-${clusterId}`,
+} as const
+
+// =============================================================================
 // FORM COMPONENTS (from settings/)
 // =============================================================================
 

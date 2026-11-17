@@ -24,7 +24,7 @@ from src.models.feed import Post, MastodonAppCredential  # Beanie document model
 
 from src.routers import health, wizard, chronicle, auth, feature_flags
 from src.routers import services, deployments, providers, service_configs, chat
-from src.routers import kubernetes, tailscale, unodes, docker, sse
+from src.routers import kubernetes, kubernetes_discovery, tailscale, unodes, docker, sse
 from src.routers import github_import, audio_relay, memories, share, dashboard
 from src.routers import feed
 from src.routers import settings as settings_api
@@ -209,6 +209,7 @@ app.include_router(docker.router, prefix="/api/docker", tags=["docker"])
 app.include_router(feature_flags.router, tags=["feature-flags"])
 app.include_router(unodes.router, prefix="/api/unodes", tags=["unodes"])
 app.include_router(kubernetes.router, prefix="/api/kubernetes", tags=["kubernetes"])
+app.include_router(kubernetes_discovery.router, prefix="/api/kubernetes", tags=["kubernetes"])
 app.include_router(services.router, prefix="/api/services", tags=["services"])
 app.include_router(providers.router, prefix="/api/providers", tags=["providers"])
 app.include_router(service_configs.router, tags=["service-configs"])

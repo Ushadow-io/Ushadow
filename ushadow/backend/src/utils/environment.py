@@ -5,6 +5,7 @@ Single source of truth for environment name, compose project, and deployment con
 """
 
 import os
+import re
 from typing import Optional
 from functools import lru_cache
 
@@ -215,3 +216,14 @@ def is_kubernetes() -> bool:
     injects into every pod automatically.
     """
     return bool(os.getenv("KUBERNETES_SERVICE_HOST"))
+
+
+# Label on every k8s object ushadow deploys: the owning environment. Lets an
+# environment find its deploys in any namespace without seeing other environments'.
+ENVIRONMENT_LABEL = "ushadow.environment"
+
+
+def environment_label_value() -> str:
+    """Current environment name as a valid k8s label value (max 63, [A-Za-z0-9._-])."""
+    value = re.sub(r"[^A-Za-z0-9._-]", "-", get_env_name()).strip("-._")
+    return value[:63].rstrip("-._") or "default"

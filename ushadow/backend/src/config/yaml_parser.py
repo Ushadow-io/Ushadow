@@ -141,6 +141,8 @@ class ComposeService:
     setup_script: Optional[str] = None  # Script to run on install (relative to compose file dir)
     k8s_resources: Optional[Dict[str, Any]] = None  # K8s resource limits/requests override
     k8s_pod_labels: dict[str, str] | None = None  # Extra pod-template labels (e.g. NetworkPolicy targeting: {"access-mem0": "true"})
+    k8s_ingress_routes: list[dict[str, Any]] | None = None  # Extra ingress paths to other services: [{path, service, port}]
+    login_handoff: str | None = None  # Token audience: open the web UI signed in via #token=
     exposes: List[Dict[str, Any]] = field(default_factory=list)  # URLs this service exposes (audio intake, http api, etc.)
     tags: List[str] = field(default_factory=list)  # Service tags from x-ushadow (e.g., ["audio", "gpu"])
     environments: List[str] = field(default_factory=list)  # Environments where service is visible (empty = all envs)
@@ -308,6 +310,8 @@ class ComposeParser(BaseYAMLParser):
         provider_id = service_meta.get("provider_id")  # YAML provider this compose service implements
         k8s_resources = service_meta.get("k8s_resources")  # K8s resource limits/requests override
         k8s_pod_labels = service_meta.get("k8s_pod_labels")  # Extra pod-template labels (NetworkPolicy targeting)
+        k8s_ingress_routes = service_meta.get("k8s_ingress_routes")  # Extra ingress paths to other services
+        login_handoff = service_meta.get("login_handoff")  # Token audience for sign-in handoff
         # These are at top level of x-ushadow, shared by all services in file
         namespace = x_ushadow.get("namespace")
         infra_services = x_ushadow.get("infra_services", [])
@@ -337,6 +341,8 @@ class ComposeParser(BaseYAMLParser):
             setup_script=setup_script,
             k8s_resources=k8s_resources,
             k8s_pod_labels=k8s_pod_labels,
+            k8s_ingress_routes=k8s_ingress_routes,
+            login_handoff=login_handoff,
             exposes=exposes,
             tags=tags,
             environments=environments,
