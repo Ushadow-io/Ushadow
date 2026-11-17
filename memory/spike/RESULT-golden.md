@@ -12,7 +12,7 @@ Setup: graphiti-core 0.31.2, `Qwen3.6-35B-A3B-MTP-GGUF` (thinking off, `json_sch
 | Day | Status |
 |---|---|
 | 2026-11-13 | run + rebuild done |
-| 2026-11-14 | **not run**: the command was refused by the session's permission classifier; needs the user's go-ahead |
+| 2026-11-14 | run done 2026-11-17 (user go-ahead), no rebuild, no probes except provenance |
 | 2026-11-07, 2026-11-10 | not run (cut for time) |
 
 Episode mapping for 13 Nov: 84 Chronicle conversations, 77 deleted (skipped), 2 empty, 5 episodes,
@@ -49,3 +49,37 @@ On this small day the extractor is cheap (3 calls, about 20 to 50 s per episode)
 reliable, but the yield is tiny and the facts it found come from media speech, because no speaker
 role can filter it. A rebuild doubles the fact count and shares no exact fact with the first run.
 One small day cannot judge precision; 14 Nov (long conversations) is the run that matters next.
+
+## 2026-11-14 (10 episodes, 1 435 to 14 231 chars, 1 541 lines)
+
+Run 2026-11-17, same setup, fresh spike Neo4j. 15 Chronicle conversations: 4 deleted, 1 empty,
+10 episodes. 314 lines are in no conversation and were not read.
+
+| Metric | median | p90 | sum |
+|---|---|---|---|
+| LLM calls per episode | 7 | 25 | 103 |
+| Input tokens per episode | 29 939 | 105 058 | 436 302 |
+| Output tokens per episode | 1 170 | 3 876 | 16 793 |
+| Wall time per episode (s) | 111 | 519 | 1 914 (32 min) |
+| New facts per episode | 3 | 20 | 65 |
+| New entities per episode | 7.5 | 13 | 79 |
+| Facts closed (supersede) | 0 | 0 | 0 |
+
+- Calls by prompt: `dedupe_edges.resolve_edge` 51, `extract_edges.extract_timestamps` 12,
+  `dedupe_nodes.nodes` 11, `extract_edges.edge` 10, `extract_nodes.extract_message` 10,
+  `extract_nodes.extract_summaries_batch` 9.
+- Failures: 0 failed episodes, 0 calls without `usage`. 29 Neo4j driver errors were logged before
+  the first episode (empty database, index setup); none after.
+- Largest single episode: 105 058 input tokens over 25 calls. This is far above the 1 000-token
+  target of the design; Graphiti re-sends the episode text in each call.
+- Entities that are only a diarization label: 4 of 79.
+- Facts with a `valid_at` time: 55 of 65.
+- Provenance: PASS, 50 of 50 checked facts trace to their source episode (episode granularity only).
+- Owner gate (applied after the run, by counting): 6 of 10 episodes have a recognised voice;
+  44 of 65 facts come from those 6. 21 facts come from conversations with no recognised voice.
+- Precision: not checked. `out/golden-1114/facts_sample.csv` (50 facts) waits for the user's hand check.
+
+## User's hand check of 13 Nov (2026-11-17)
+
+3 facts: 2 are the same fact, 1 is probably wrong, all 3 come from a TV show. 0 of 3 are about the
+user's life. Result: speaker roles and the owner gate were added (commit de13a4b1).
